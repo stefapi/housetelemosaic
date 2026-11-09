@@ -563,9 +563,39 @@ function ht.build_basement(job, F)
         end
     end
     if not placed then
+        -- DERNIER RECOURS : descente par paliers de 5 nodes jusqu'à
+        -- F-45, à la recherche d'une profondeur libre de TOUTE
+        -- collision native. Pourquoi c'est nécessaire avec
+        -- basement_chance = 1.0 : les maisons SANS cellier natif sont
+        -- précisément celles volées par une entrée randungeon cachée
+        -- (randungeon_entrance_chance = 0.5 ici : 50 % des _30_) ou
+        -- refusées par le natif -- leur sous-sol proche est occupé
+        -- par le puits randungeon (pré-creusé jusqu'à ~y1-18, soit
+        -- F-22 par ancrage -4) ; les celliers natifs s'arrêtent à
+        -- F-15. À partir de F-27 la zone est vierge dans tous les
+        -- cas ; on sonde F-20, F-25, ... F-45 et prend la première
+        -- profondeur dégagée, avec le puits classique depuis F (il
+        -- n'y a PAS de cellier dans ce chemin, le puits ne peut
+        -- croiser que le puits randungeon -- évité par la sonde de
+        -- collision elle-même).
+        local depth = 20
+        while depth <= 45 do
+            local test_y = F - depth - 1
+            if not native_collision(cx, cz, F, test_y) then
+                y_floor = test_y
+                ox, oz = 0, 0
+                placed = true
+                ht.dlog("dernier recours : chambre à F-" .. depth
+                    .. " pour " .. job.name)
+                break
+            end
+            depth = depth + 5
+        end
+    end
+    if not placed then
         minetest.log("action", "[housetelemosaic] abandon : sous-sol "
             .. "natif encombrant sous " .. job.name .. " à "
-            .. minetest.pos_to_string(job.pos))
+            .. minetest.pos_to_string(job.pos) .. " (sondé jusqu'à F-45)")
         return nil
     end
     cx, cz = cx + ox, cz + oz
