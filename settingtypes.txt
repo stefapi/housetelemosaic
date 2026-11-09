@@ -1,0 +1,49 @@
+# Réglages de House Telemosaic
+# Chaque maison nativevillages éligible peut recevoir un sous-sol avec
+# un pad telemosaic pointant vers une destination lointaine.
+
+# Probabilité qu'une maison éligible reçoive le sous-sol telemosaic (0.0 à 1.0)
+housetelemosaic_chance (Chance d'un sous-sol telemosaic) float 1.0 0.0 1.0
+
+# Liste ordonnée des destinations possibles, séparées par des virgules
+# (valeurs valides : cave, dungeon, maze, sky)
+housetelemosaic_destinations (Destinations possibles) string cave,dungeon,maze,sky
+
+# Mode de choix de la destination : ordered (première disponible de la
+# liste) ou random (tirage aléatoire parmi les disponibles)
+housetelemosaic_dest_mode (Mode de choix de la destination) enum ordered ordered,random
+
+# Poser aussi un lien retour sur le pad de destination vers la maison
+housetelemosaic_return_enabled (Activer le lien retour) bool true
+
+# Poser une mini-grotte artificielle si aucune grotte naturelle n'est
+# trouvée dans le rayon de recherche
+housetelemosaic_cave_artificial_fallback (Grotte artificielle de secours) bool true
+
+# Profondeur cible du pad de grotte sous la surface (nœuds)
+housetelemosaic_cave_depth (Profondeur de la grotte) int 30 10 200
+
+# Rayon de recherche horizontal d'une grotte naturelle (nœuds)
+housetelemosaic_cave_radius (Rayon de recherche de grotte) int 48 16 256
+
+# Profondeur du pad de labyrinthe sous la surface (nœuds)
+housetelemosaic_maze_depth (Profondeur du labyrinthe) int 25 5 100
+
+# Largeur du labyrinthe généré, en cellules (l'emprise au sol couvre
+# 2W+1 nœuds ; le labyrinthe est carré)
+housetelemosaic_maze_width (Largeur du labyrinthe) int 21 9 51
+
+# Hauteur des couloirs du labyrinthe (nœuds)
+housetelemosaic_maze_height (Hauteur du labyrinthe) int 5 3 10
+
+# Profondeur du sous-sol telemosaic sous le plancher de la maison (nœuds)
+housetelemosaic_basement_depth (Profondeur du sous-sol) int 5 3 15
+
+# Rayon de recherche d'une île cloudlands (nœuds, 0 pour désactiver)
+housetelemosaic_sky_search_radius (Rayon de recherche cloudlands) int 512 0 2048
+
+# Nombre maximum d'extendeurs telemosaic posés par pad (0 = illimité)
+housetelemosaic_max_extenders (Extendeurs maximum par pad) int 12 0 64
+
+# Journalisation de debug détaillée dans le log du serveur
+housetelemosaic_debug (Debug) bool false
