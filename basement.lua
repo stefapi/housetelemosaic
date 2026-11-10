@@ -100,9 +100,73 @@ local function native_collision(cx, cz, F, y_floor)
     return false
 end
 
--- Dalle basse d'un éventuel cellier NATIF (réécriture nativevillages
--- de 2026-11-09 : le cellier remplit tout l'intérieur, marge 2, dalles
--- à F-k*5 pour k = 1..3, dalle basse donc entre F-5 et F-15) : le plus
+-- Zone de chambre LIBRE (dernier recours profond) : contrairement à
+-- native_collision, ne sonde QUE l'emprise de la chambre future
+-- (y_floor-1 .. y_floor+5 : dalle, intérieur, plafond, couronnement)
+-- sur les 9 colonnes -- le terrain AU-DESSUS n'est pas testé, c'est
+-- au puits de le traverser proprement (shaft_column_full ci-dessous).
+-- Sert au dernier recours : native_collision sonde toute la colonne
+-- au-dessus de la chambre et verrait l'air du cellier ou du puits
+-- randungeon, condamnant toutes les profondeurs.
+local function chamber_zone_free(cx, cz, y_floor)
+    local cols = {
+        {cx, cz},
+        {cx - 3, cz - 3}, {cx + 3, cz - 3},
+        {cx - 3, cz + 3}, {cx + 3, cz + 3},
+        {cx - 3, cz}, {cx + 3, cz},
+        {cx, cz - 3}, {cx, cz + 3},
+    }
+    for _, col in ipairs(cols) do
+        for y = y_floor - 1, y_floor + 5 do
+            local name = node_name(col[1], y, col[2])
+            if name == "air" or name == "default:ladder_wood"
+                or name == "default:ladder" then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+-- Colonne de puits PROFONDE : même élection que shaft_column (F
+-- marchable, 2 airs, pas de porte) MAIS la colonne F-1..y_bottom doit
+-- être du terrain PLEIN (aucun air/échelle : on ne doit percer que de
+-- la roche, jamais traverser le cellier natif ou le puits randungeon
+-- en détruisant leur échelle). Retourne sx, sz ou nil.
+local function shaft_column_full(cx, cz, F, y_bottom)
+    local offsets = {-1, 1, -2, 2, -3, 3}
+    for _, dx in ipairs(offsets) do
+        for _, dz in ipairs(offsets) do
+            local sx, sz = cx + dx, cz + dz
+            local f0 = node_name(sx, F, sz)
+            local f1 = node_name(sx, F + 1, sz)
+            local f2 = node_name(sx, F + 2, sz)
+            if f0 and f1 and f2 and ht.is_walkable_name(f0)
+                and not is_door_name(f0)
+                and is_open(f1) and is_open(f2)
+                and not is_door_name(f1) and not is_door_name(f2) then
+                local clear = true
+                for y = y_bottom + 1, F - 1 do
+                    local name = node_name(sx, y, sz)
+                    if name == "air" or name == "default:ladder_wood"
+                        or name == "default:ladder"
+                        or name == "ignore" then
+                        clear = false
+                        break
+                    end
+                end
+                if clear then
+                    return sx, sz
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Dalle basse d'un éventuel cellier NATIF (le cellier remplit tout
+-- l'intérieur, marge 2, dalles à F-k*5 pour k = 1..3, dalle basse
+-- donc entre F-5 et F-15) : le plus
 -- profond y de [F-22 .. F-4] tel que node(y) soit une dalle marchable
 -- (fenêtre démarrant à F-4, JAMAIS F-2/F-3 : c'est le plancher même
 -- de la maison -- un match sur le plancher posait le pad au
@@ -115,7 +179,7 @@ end
 -- cellier, aucun y ne matche (fondation compacte garantie par
 -- foundation_solid côté natif) ; une grotte résiduelle matcherait —
 -- connexion par le dessous d'une grotte reste un atterrissage valide.
-local function find_native_cellar_floor(cx, cz, F, box)
+ht.find_native_cellar_floor = function(cx, cz, F, box)
     local probes = {
         {cx, cz},
         {cx - 2, cz}, {cx + 2, cz}, {cx, cz - 2}, {cx, cz + 2},
@@ -180,7 +244,7 @@ end
 -- desservent déjà la maison. Retourne pad_pos ou nil (cellier trop
 -- encombré). Synchrone : la zone du cellier est dans l'emprise de la
 -- maison, déjà émergée par nativevillages.
-local function patch_cellar(job, box, cellar_floor, cx, cz)
+ht.patch_cellar = function(job, box, cellar_floor, cx, cz)
     if not N_BEACON then
         return nil
     end
@@ -253,31 +317,52 @@ local function patch_cellar(job, box, cellar_floor, cx, cz)
     return pad
 end
 
--- Élection de la colonne du puits (sx, sz) : décalages ordonnés autour
--- du centre (max +/-2, même marge que basements.lua MARGIN) ; il faut
--- un plancher marchable à F et 2 airs au-dessus (on ne perce pas une
--- cloison centrale), et pas de porte/trappe. Le CENTRE n'est plus
--- candidat : le beacon de la chambre y est encastré (voir dig), le
--- puits atterrit donc toujours à l'écart du pad, jamais au-dessus.
+-- Élection de la colonne du puits (sx, sz) : anneaux croissants
+-- autour du centre jusqu'à +/-4 (les petites empreintes -- tiny
+-- houses -- n'offrent souvent aucune colonne libre dans l'anneau
+-- +/-2). Il faut un
+-- plancher marchable à F et pas de porte/trappe ; au-dessus, un node
+-- NON marchable remplaçable (tapis, plante, torche -- jamais porte,
+-- trappe, lit ni liquide) est DÉGAGÉ pour poser la trappe. Le CENTRE
+-- n'est pas candidat : le beacon de la chambre y est encastré (voir
+-- dig), le puits atterrit donc toujours à l'écart du pad.
 local function shaft_column(cx, cz, F)
-    local offsets = {-1, 1, -2, 2}
-    for _, dx in ipairs(offsets) do
-        for _, dz in ipairs(offsets) do
-            local sx, sz = cx + dx, cz + dz
-            local f0 = node_name(sx, F, sz)
+    local rings = {{0, 0},
+        {0, -1}, {1, 0}, {0, 1}, {-1, 0},
+        {1, -1}, {1, 1}, {-1, 1}, {-1, -1},
+        {0, -2}, {2, 0}, {0, 2}, {-2, 0},
+        {1, -2}, {2, -1}, {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
+        {-2, -1}, {-1, -2},
+        {0, -3}, {3, 0}, {0, 3}, {-3, 0},
+        {0, -4}, {4, 0}, {0, 4}, {-4, 0}}
+    local function clearable(name)
+        if name == nil or name == "ignore" then
+            return false
+        end
+        if is_door_name(name) or name:find("bed", 1, true) then
+            return false
+        end
+        local def = minetest.registered_nodes[name]
+        return def ~= nil and not def.walkable
+            and def.liquidtype == "none"
+    end
+    for _, off in ipairs(rings) do
+        local sx, sz = cx + off[1], cz + off[2]
+        local f0 = node_name(sx, F, sz)
+        if f0 and ht.is_walkable_name(f0) and not is_door_name(f0) then
             local f1 = node_name(sx, F + 1, sz)
             local f2 = node_name(sx, F + 2, sz)
-            -- une TRAPPE (native du cellier ou autre) est walkable
-            -- fermée mais n'est PAS un plancher perçable : le test
-            -- is_door_name la rejette pour f0, et une trappe ouverte
-            -- (non walkable) au-dessus échouerait le test f1 walkable
-            -- de toute façon ; on exclut aussi f1/f2 trappe (le puits
-            -- ne doit jamais déboucher DANS un cellier natif par
-            -- l'anneau de couronnement)
-            if f0 and f1 and f2 and ht.is_walkable_name(f0)
-                and not is_door_name(f0)
-                and is_open(f1) and is_open(f2)
-                and not is_door_name(f1) and not is_door_name(f2) then
+            if f1 and f2
+                and (is_open(f1) or clearable(f1))
+                and (is_open(f2) or clearable(f2)) then
+                if clearable(f1) then
+                    minetest.set_node({x = sx, y = F + 1, z = sz},
+                        {name = "air"})
+                end
+                if clearable(f2) then
+                    minetest.set_node({x = sx, y = F + 2, z = sz},
+                        {name = "air"})
+                end
                 return sx, sz
             end
         end
@@ -536,8 +621,8 @@ function ht.build_basement(job, F)
     end
     local cellar_floor = nil
     if not placed then
-        -- Cellier natif détecté (réécriture nativevillages 2026-11-09 :
-        -- le cellier remplit tout l'intérieur, aucune chambre 9x9 ne
+        -- Cellier natif détecté (le cellier remplit tout l'intérieur,
+        -- aucune chambre 9x9 ne
         -- tient dessous). DEUX stratégies, par ordre de préférence :
         -- 1) PATCH DIRECT (prioritaire, zéro excavation) : le beacon
         --    est encastré dans la dalle du niveau LE PLUS BAS du
@@ -552,6 +637,8 @@ function ht.build_basement(job, F)
             local pad = patch_cellar(job, box, cellar_floor, cx, cz)
             if pad then
                 ht.stats.pads_dug = ht.stats.pads_dug + 1
+                ht.stats.decisions.patch_cellar
+                    = ht.stats.decisions.patch_cellar + 1
                 ht.last_basement = {pad = pad, F = F}
                 return pad
             end
@@ -562,55 +649,70 @@ function ht.build_basement(job, F)
                 .. ") : chambre connectée par le dessous pour " .. job.name)
         end
     end
+    local deep_mode = false
     if not placed then
         -- DERNIER RECOURS : descente par paliers de 5 nodes jusqu'à
-        -- F-45, à la recherche d'une profondeur libre de TOUTE
-        -- collision native. Pourquoi c'est nécessaire avec
-        -- basement_chance = 1.0 : les maisons SANS cellier natif sont
-        -- précisément celles volées par une entrée randungeon cachée
-        -- (randungeon_entrance_chance = 0.5 ici : 50 % des _30_) ou
-        -- refusées par le natif -- leur sous-sol proche est occupé
-        -- par le puits randungeon (pré-creusé jusqu'à ~y1-18, soit
-        -- F-22 par ancrage -4) ; les celliers natifs s'arrêtent à
-        -- F-15. À partir de F-27 la zone est vierge dans tous les
-        -- cas ; on sonde F-20, F-25, ... F-45 et prend la première
-        -- profondeur dégagée, avec le puits classique depuis F (il
-        -- n'y a PAS de cellier dans ce chemin, le puits ne peut
-        -- croiser que le puits randungeon -- évité par la sonde de
-        -- collision elle-même).
+        -- F-50. Les maisons sans cellier natif portent souvent une
+        -- entrée randungeon cachée : leur sous-sol proche est occupé
+        -- par le puits randungeon. La chambre ne teste QUE sa propre
+        -- emprise (chamber_zone_free) ; le puits descend par une
+        -- colonne de terrain PLEIN uniquement (shaft_column_full :
+        -- jamais traverser le cellier natif ni l'escalier randungeon).
         local depth = 20
-        while depth <= 45 do
+        while depth <= 50 do
             local test_y = F - depth - 1
-            if not native_collision(cx, cz, F, test_y) then
+            if chamber_zone_free(cx, cz, test_y)
+                and shaft_column_full(cx, cz, F, test_y + 5) then
                 y_floor = test_y
                 ox, oz = 0, 0
                 placed = true
-                ht.dlog("dernier recours : chambre à F-" .. depth
-                    .. " pour " .. job.name)
+                deep_mode = true
+                ht.stats.decisions.deep_fallback
+                    = ht.stats.decisions.deep_fallback + 1
+                minetest.log("action", "[housetelemosaic] dernier "
+                    .. "recours : chambre à F-" .. depth .. " pour "
+                    .. job.name .. " à " .. minetest.pos_to_string(job.pos))
                 break
             end
             depth = depth + 5
         end
     end
     if not placed then
+        ht.stats.decisions.giveup_native
+            = ht.stats.decisions.giveup_native + 1
         minetest.log("action", "[housetelemosaic] abandon : sous-sol "
             .. "natif encombrant sous " .. job.name .. " à "
-            .. minetest.pos_to_string(job.pos) .. " (sondé jusqu'à F-45)")
+            .. minetest.pos_to_string(job.pos) .. " (sondé jusqu'à F-50)")
         return nil
+    end
+    if not deep_mode and cellar_floor then
+        ht.stats.decisions.under_cellar
+            = ht.stats.decisions.under_cellar + 1
+    elseif not deep_mode then
+        ht.stats.decisions.classic
+            = ht.stats.decisions.classic + 1
     end
     cx, cz = cx + ox, cz + oz
 
-    -- colonne du puits (décalage autour du centre si cloison/meuble :
-    -- le centre est réservé au... rien du tout, le beacon est au coin).
-    -- En mode connexion par le dessous (cellier natif), PAS de puits :
-    -- l'accès passe par la trappe native et le trou d'échelle percé
-    -- dans la dalle basse (voir dig) ; sx/sz restent utilisés pour le
-    -- coin du beacon (le trou est au centre, le beacon au coin opposé).
-    local sx, sz = shaft_column(cx, cz, F)
+    -- colonne du puits. Mode profond : shaft_column_full (colonne de
+    -- terrain plein jusqu'à la chambre -- la géométrie a déjà été
+    -- élue par la boucle de dernier recours, on la retrouve ici).
+    -- Mode cellier : PAS de puits (l'accès passe par la trappe native
+    -- et le trou d'échelle percé dans la dalle basse, voir dig) ;
+    -- sx/sz restent utilisés pour le coin du beacon. Mode classique :
+    -- shaft_column (F marchable, 2 airs, pas de porte).
+    local sx, sz
+    if deep_mode then
+        sx, sz = shaft_column_full(cx, cz, F, y_floor + 5)
+    else
+        sx, sz = shaft_column(cx, cz, F)
+    end
     if not sx then
         if cellar_floor then
             sx, sz = cx - 1, cz - 1 -- coin fictif : beacon opposé (cx+2,cz+2)
         else
+            ht.stats.decisions.giveup_shaft
+                = ht.stats.decisions.giveup_shaft + 1
             minetest.log("action", "[housetelemosaic] abandon : aucune "
                 .. "colonne de puits libre dans " .. job.name .. " à "
                 .. minetest.pos_to_string(job.pos))
@@ -636,6 +738,8 @@ function ht.build_basement(job, F)
                 .. "sous " .. job.name .. ", pad "
                 .. minetest.pos_to_string(result))
         else
+            ht.stats.decisions.dig_fail
+                = ht.stats.decisions.dig_fail + 1
             minetest.log("warning", "[housetelemosaic] dig échoué pour "
                 .. job.name .. " : " .. tostring(result))
         end

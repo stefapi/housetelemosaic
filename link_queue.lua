@@ -1,5 +1,5 @@
 -- link_queue.lua : file de liaison pad -> destination, persistée en
--- mod storage. VAGUE 2 : materialize chez le provider puis
+-- mod storage. materialize chez le provider puis
 -- ht.link_pads ; après 3 échecs, tente le PROVIDER SUIVANT de la
 -- chaîne (recalculée depuis le job, provider défaillant exclu, rng
 -- re-seedé avec offset = tries : déterministe par maison) avant de
@@ -10,9 +10,8 @@
 -- Contrat de sérialisation : entry = {pad (pos plate), job (mince :
 -- name/pos/box/biome_name), plan (JSON-safe, contrat providers),
 -- provider (string), tries (nombre)}. Le job mince est fabriqué par
--- hook.lua slim_job() ; les entries anciennes (vague 1, job copie
--- profonde éventuellement enrichie) restent lisibles : seuls les
--- champs consommés sont accédés.
+-- hook.lua slim_job() ; les entries anciennes (job copie profonde)
+-- restent lisibles : seuls les champs consommés sont accédés.
 
 local ht = housetelemosaic
 
@@ -152,11 +151,11 @@ local function handle_entry(id, entry)
     -- Pad pas encore posé ? Trois cas : dig encore en vol (entrées
     -- fraîches : le creusage asynchrone du sous-sol peut devancer la
     -- file), chunk non chargé (get_node -> "ignore", typiquement au
-    -- démarrage pour les entrées persistées), ou pad fantôme hérité
-    -- du bug EMERGE_OK (dig qui n'a jamais abouti). On re-vérifie
-    -- dans 5 s SANS consommer d'essai ni re-materializer ; après une
-    -- douzaine de reports (~1 min), l'entrée est purgée -- un dig
-    -- réel ne prend jamais aussi longtemps
+    -- démarrage pour les entrées persistées), ou pad fantôme (dig
+    -- n'ayant jamais abouti, p.ex. serveur arrêté en cours d'emerge).
+    -- On re-vérifie dans 5 s SANS consommer d'essai ni re-materializer
+    -- ; après une douzaine de reports (~1 min), l'entrée est purgée
+    -- -- un dig réel ne prend jamais aussi longtemps
     local pad_node = core.get_node(entry.pad)
     if core.get_item_group(pad_node.name, "telemosaic") == 0 then
         entry.waits = (entry.waits or 0) + 1

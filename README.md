@@ -1,9 +1,8 @@
 # House Telemosaic (`housetelemosaic`)
 
-Chaque maison nativevillages éligible (préfixes `grasslandhouse`, `deserthouse`, `savannahouse`,
-`icehouse`, `junglehouse`, `cannibalhouse`, `lakehouse` ; bâtiments `*_cloudlands` exclus) reçoit,
-selon une chance réglable (défaut : toutes), un sous-sol accessible par trappe et échelle,
-contenant un pad telemosaic bidirectionnel pointant vers :
+Chaque maison nativevillages éligible reçoit, selon une chance réglable (défaut : toutes), un
+sous-sol accessible par trappe et échelle, contenant un pad telemosaic bidirectionnel pointant
+vers :
 
 - une **grotte** : poche d'air naturelle scannée en profondeur, avec salle artificielle de
   secours si aucune n'est trouvée ;
@@ -14,6 +13,12 @@ contenant un pad telemosaic bidirectionnel pointant vers :
   environ 8 % des murs pour créer des boucles ;
 - l'**île cloudlands** la plus proche : plateforme d'arrivée stabilisée (destination `sky`,
   mod `cloudlands` requis).
+
+Maisons éligibles : préfixes `grasslandhouse`, `deserthouse`, `savannahouse`, `icehouse`,
+`junglehouse`, `cannibalhouse`, `grasslandtown_house`, `grasslandsmall_house`,
+`savannawitchhouse` ; bâtiments `*_cloudlands` et maisons sur pilotis (`lakehouse`) exclus.
+Seules les maisons **nouvellement générées** sont équipées — pour les villages existants,
+utiliser `/htscanarea`.
 
 ## Dépendances
 
@@ -42,24 +47,31 @@ le mod reste inerte avec un log d'erreur explicite.
 La chance d'équipement est tirée de façon déterministe par maison (flux `PcgRandom` :
 graine du monde + coordonnées), ré-exécutable à l'identique sur un chunk régénéré.
 
-### Sous-sol
+### Sous-sol : cinq chemins de construction
 
-- Chambre 9x9 sous la maison : murs stonebrick, sol cobble, torches ; plafond percé d'un
-  puits 1x1 muni d'une échelle et fermé par une trappe dans le plancher ; beacon telemosaic
-  ENCASTRÉ dans la dalle (affleurant), au coin diagonalement opposé au puits — jamais au
-  pied de l'échelle. Les extendeurs longues distances sont encastrés dans la dalle de la
-  même façon (seuls `default:cobble`/`default:stone_block` posés par le mod sont remplaçables).
-- Anti-collision avec les sous-sols natifs et les entrées randungeon : sondage de 9 colonnes,
-  décalage de la chambre (+4/+4 puis +8/+8), approfondissement de 4 en dernier recours ;
-  abandon propre si aucune position n'est libre.
-- **Patch direct du cellier natif** (prioritaire) : quand la maison possède un cellier natif,
-  le beacon est encastré dans la dalle de son niveau le plus bas, dans une cellule libre à
-  ≥ 3 nodes de l'échelle native, sur une dalle de stabilisation 3×3 — zéro excavation, le
-  cellier devient la pièce du téléporteur.
-- **Connexion par le dessous** (repli si le cellier est encombré de meubles) : la chambre
-  s'installe sous la dalle basse du cellier, sans puits ni trappe propres — un trou
-  d'échelle percé dans sa dalle basse descend jusqu'au pad
-  (maison → trappe native → cellier → échelle → chambre du pad).
+Par ordre de préférence, la maison reçoit son pad par l'un de ces chemins :
+
+1. **Patch direct du cellier natif** : quand la maison possède un cellier natif, le beacon
+   est encastré dans la dalle de son niveau le plus bas, dans une cellule libre à ≥ 3 nodes
+   de l'échelle native, sur une dalle de stabilisation 3×3 — zéro excavation, le cellier
+   devient la pièce du téléporteur.
+2. **Chambre classique 9x9** (maison sans cellier) : murs stonebrick, sol cobble, torches ;
+   plafond percé d'un puits 1x1 muni d'une échelle et fermé par une trappe dans le
+   plancher ; beacon ENCASTRÉ dans la dalle (affleurant), au coin diagonalement opposé au
+   puits — jamais au pied de l'échelle. Anti-collision avec les sous-sols natifs et les
+   entrées randungeon (sondage de 9 colonnes, décalages +4/+8, approfondissement).
+3. **Connexion par le dessous** (cellier présent mais impossible à patcher ni à éviter) :
+   la chambre s'installe sous la dalle basse du cellier, sans puits ni trappe propres —
+   un trou d'échelle percé dans sa dalle basse descend jusqu'au pad
+   (maison → trappe native → cellier → échelle → chambre du pad).
+4. **Chambre profonde** : par paliers de 5 nodes jusqu'à F-50 quand le sous-sol proche est
+   entièrement occupé (puits randungeon) — la chambre ne sonde que sa propre emprise, le
+   puits descend par une colonne de terrain plein.
+5. **Mode sans plancher** : aucune sonde du scan de plancher ne passe (cellier meublé) —
+   patch direct du cellier avec un niveau estimé.
+
+Les extendeurs longues distances sont encastrés dans la dalle comme le beacon (seuls
+`default:cobble`/`default:stone_block` posés par le mod sont remplaçables).
 
 ### Choix de la destination
 
@@ -70,14 +82,14 @@ rotation aléatoire déterministe (mode `random`), avec chaîne de fallback entr
 - **cave** : scan VoxelManip en lecture seule des poches d'air habitables, dans un rayon
   `cave_radius` et une fenêtre profonde (y1-60 à y1-20, clampée) ; salle artificielle 9x9
   en secours si aucune poche n'est trouvée (désactivable) ;
-- **maze** : grille de WxH cellules (emprise (2W+1)x(2H+1) nœuds), recursive backtracker
-  déterministe, carotte retirant `floor(W*H*0.08)` murs séparateurs (boucles), beacon posé
-  à l'entrée, enceinte ouverte au nord ;
 - **dungeon** : scan des sols caractéristiques des donjons natifs (cobble, mossycobble,
   stonebrick — les mêmes salles que `dungeonsplus` décore) dans un rayon de 48 et une
   fenêtre profonde y1-200..y1-25 ; si aucune salle n'est trouvée : donjon `randungeon`
   généré via `randungeon.make_dungeon` (40x40, 3 niveaux, matériaux aléatoires), sinon
   salle voûtée 9x9 mossycobble/stonebrick ;
+- **maze** : grille carrée de W cellules (emprise (2W+1)² nœuds), recursive backtracker
+  déterministe, carotte retirant `floor(W*W*0.08)` murs séparateurs (boucles), beacon posé
+  à l'entrée, enceinte ouverte au nord ;
 - **sky** : île la plus proche via `cloudlands.find_nearest_island` (rayon
   `sky_search_radius`) ; plateforme d'arrivée stabilisée : 3x3 sur le sol réel de l'île,
   ou plateforme artificielle 7x7 si le terrain n'y est pas.
@@ -126,7 +138,7 @@ le défaut.
 | Commande | Privilège | Description |
 |----------|-----------|-------------|
 | `/htstats` | — | État de la file : entrées par provider, abandons cumulés, dernier pad, hook |
-| `/htcheck` | — | Diagnostic d'installation : hook, source nativevillages, compteurs de session étape par étape |
+| `/htcheck` | — | Diagnostic d'installation (hook, compteurs étape par étape) ; le rapport est aussi écrit dans `htcheck_report.txt` à la racine du monde |
 | `/htrelink` | `server` | Relance le traitement de toutes les entrées de la file |
 | `/htforce` | `server` | Test complet du pipeline : sous-sol + pad forcés sous la position du joueur |
 | `/htdebug` | `server` | Bascule la journalisation de debug en cours d'exécution |
@@ -142,12 +154,14 @@ le défaut.
 - **Aucune écriture dans un chunk non généré** : toutes les constructions hors de l'emprise
   déjà émergée de la maison (sous-sol, grotte, labyrinthe, plateforme) passent d'abord par
   `emerge_area` ; le callback ne s'exécute que si 100 % des blocs émergent avec succès
-  (actions `EMERGE_FROM_MEMORY`, `EMERGE_FROM_DISK` ou `EMERGE_GENERATED` — la constante
-  `EMERGE_OK` n'existe pas dans l'API Luanti).
+  (actions `EMERGE_FROM_MEMORY`, `EMERGE_FROM_DISK` ou `EMERGE_GENERATED`).
 - **Séparation verticale** des structures (F = plancher de la maison) : chambre du sous-sol
-  à F - basement_depth - 1 (sol à F-6 par défaut), labyrinthe à F - maze_depth (F-25 par
-  défaut), grotte artificielle à y1 - cave_depth (au moins 26 nœuds sous la base de la
-  maison) — profondeurs distinctes par défaut, jamais superposées.
+  à F - basement_depth - 1 (sol à F-6 par défaut), labyrinthe à F - maze_depth, grotte
+  artificielle à y1 - cave_depth (au moins 26 nœuds sous la base de la maison) —
+  profondeurs distinctes par défaut, jamais superposées.
+- **Robustesse** : toute la chaîne asynchrone (callbacks emerge, minetest.after) est sous
+  `pcall` — une erreur du mod ne peut jamais interrompre le serveur ; le mod storage est
+  capturé au chargement uniquement (`get_mod_storage()` rend nil au runtime).
 
 ## Licence
 

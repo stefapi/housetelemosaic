@@ -7,7 +7,7 @@
 -- setting cloudlands_altitude : défaut RÉEL 180 (settingtypes.txt du
 -- mod cloudlands, PAS 200 comme l'annonçait l'ébauche de spec).
 --
--- RAISONNEMENT EMERGE/GÉNÉRATION (SPEC §9, documenté) :
+-- RAISONNEMENT EMERGE/GÉNÉRATION (documenté ici) :
 -- cloudlands écrit ses îles dans SON register_on_generated. Un
 -- chunk d'île pas encore généré au moment de la liaison maison
 -- pourrait sembler devoir écraser une plateforme posée trop tôt.
@@ -184,7 +184,7 @@ local function build_artificial_platform(platform, ground_y)
 end
 
 --
--- Travail une fois émergé : relire le sol (raisonnement §9 ci-dessus).
+-- Travail une fois émergé : relire le sol (raisonnement en tête de fichier).
 -- platform.y = island_ground_y + 1 -> le sol attendu est à
 -- platform.y - 1.
 --
@@ -237,7 +237,7 @@ ht.providers.sky = {
     -- = île déjà CHARGÉE au moment du plan ; get_node_or_nil ne
     -- distingue pas "généré-déchargé" de "jamais généré" -> drapeau
     -- purement informatif, la vérité est lue après emerge dans
-    -- materialize (voir §9 en tête de fichier).
+    -- materialize (raisonnement en tête de fichier).
     get_destination = function(job, rng)
         if not N_BEACON then
             return nil

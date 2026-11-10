@@ -10,11 +10,11 @@ local ht = housetelemosaic
 -- sont plus dans le storage et les metas ne sont pas énumérables
 -- sans parcourir la carte -> un simple champ de storage, incrémenté
 -- par la file au moment de la purge unlinked.
--- NB : get_mod_storage() ne vaut QUE pendant le chargement du mod
--- (au runtime il rend nil, d'où l'ancien crash) ; on lit la
--- référence partagée ht.mod_storage, capturée au chargement par
--- link_queue.lua, et on reste défensif : ce hook est appelé depuis
--- un callback emerge asynchrone, il ne doit JAMAIS crasher.
+-- NB : get_mod_storage() ne rend un StorageRef valide QUE pendant
+-- le chargement du mod -- au runtime on lit la référence partagée
+-- ht.mod_storage (capturée au chargement par link_queue.lua) ; le
+-- code reste défensif : appelé depuis un callback emerge asynchrone,
+-- il ne doit jamais crasher.
 local function bump_unlinked()
     local storage = ht.mod_storage
     if not storage then
@@ -112,7 +112,7 @@ minetest.register_chatcommand("htcheck", {
     func = function(name)
         local s = ht.stats
         local lines = { "[housetelemosaic] diagnostic :" }
-        lines[#lines + 1] = "  mod chargé : oui (vague 2)"
+        lines[#lines + 1] = "  mod chargé : oui"
         lines[#lines + 1] = "  hook : "
             .. (ht._patched and ("installé sur nativevillages."
                 .. tostring(ht._patched)) or "NON installé")
@@ -141,6 +141,14 @@ minetest.register_chatcommand("htcheck", {
             .. ", échecs d'essai : " .. s.mat_fail
             .. ", bascules : " .. s.provider_switch
             .. ", unlinked (cumul storage) : " .. unlinked_total
+        local d = s.decisions or {}
+        lines[#lines + 1] = "  décisions sous-sol : cellier patché "
+            .. (d.patch_cellar or 0) .. ", sous cellier "
+            .. (d.under_cellar or 0) .. ", classique "
+            .. (d.classic or 0) .. ", profond "
+            .. (d.deep_fallback or 0) .. " | abandons : natif "
+            .. (d.giveup_native or 0) .. ", puits "
+            .. (d.giveup_shaft or 0) .. ", dig " .. (d.dig_fail or 0)
         if s.calls == 0 then
             lines[#lines + 1] = "  >> wrapper jamais appelé : le terrain "
                 .. "exploré était déjà généré, ou aucun village. "
@@ -149,6 +157,25 @@ minetest.register_chatcommand("htcheck", {
         elseif s.pads_dug == 0 and s.pads > 0 then
             lines[#lines + 1] = "  >> pads programmés mais jamais creusés "
                 .. ": voir les warnings emerge dans debug.txt"
+        end
+        -- le rapport est AUSSI écrit dans un fichier du monde :
+        -- ouvrable dans n'importe quel éditeur de texte (la copie
+        -- depuis le chat Luanti n'est pas toujours possible)
+        local ok, err = pcall(function()
+            local worldpath = minetest.get_worldpath()
+            local f = io.open(worldpath .. "/htcheck_report.txt", "w")
+            if not f then
+                error("impossible d'ouvrir htcheck_report.txt")
+            end
+            f:write(table.concat(lines, "\n") .. "\n")
+            f:close()
+        end)
+        if ok then
+            lines[#lines + 1] = "  rapport écrit : "
+                .. minetest.get_worldpath() .. "/htcheck_report.txt"
+        else
+            lines[#lines + 1] = "  (écriture du rapport impossible : "
+                .. tostring(err) .. ")"
         end
         return true, table.concat(lines, "\n")
     end,
@@ -307,8 +334,7 @@ minetest.register_chatcommand("htdebug", {
 -- sous-sols du mod déjà construits autour du joueur. Cible les pads
 -- MAISON (meta housetelemosaic:state) -- les beacons d'arrivée des
 -- providers n'ont pas cette meta. Réparations :
---  R1 échelle : rungs manquants complétés jusqu'à y_floor+1 (l'ancien
---     code s'arrêtait à y_floor+2 : chute du dernier node)
+--  R1 échelle : rungs manquants complétés jusqu'à y_floor+1
 --  R2 puits : échelle complétée jusqu'à F-1 (premier plancher marchable
 --     au-dessus), trappe posée si le plancher F est resté plein
 --  R3 mode cellier : passage air x2 au-dessus du haut d'échelle quand

@@ -307,10 +307,7 @@ ht.providers.maze = {
 
         -- Grille carrée W x W : maze_width est la dimension en
         -- CELLULES ; maze_height est la hauteur VERTICALE des
-        -- couloirs (settingtypes.txt vague 1 : "Hauteur des
-        -- couloirs", bornes 3..10 -- incompatible avec une dimension
-        -- de grille ; écart documenté vs ébauche de spec vague 2 qui
-        -- parlait de "W x H déf 15x15")
+        -- couloirs (bornes 3..10), pas une dimension de grille
         local W = math.floor(ht.settings.maze_width)
         local H = W
         local gw = 2 * W + 1

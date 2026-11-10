@@ -9,7 +9,7 @@ local ht = housetelemosaic
 --
 ht.BASE_SEED = 0xBA5E4E7   -- flux générique du mod
 ht.HOUSE_SEED = 0x4A0E5EED -- tirage chance par maison
-ht.MAZE_SEED = 0xAB1E      -- flux du générateur de labyrinthe (vague 2)
+ht.MAZE_SEED = 0xAB1E      -- flux du générateur de labyrinthe
 
 -- Graine du monde, lue à la demande (peut changer entre mondes)
 function ht.world_seed()
@@ -41,6 +41,18 @@ ht.stats = {
     mat_fail = 0,         -- échecs materialize/liaison (essais)
     provider_switch = 0,  -- bascules de provider de secours
     unlinked = 0,         -- abandons définitifs (session)
+    -- répartition des décisions de build_basement (diagnostic
+    -- "chance 1.0 mais pads rares" : qui prend la décision, et où
+    -- elle échoue) -- /htcheck
+    decisions = {
+        patch_cellar = 0,   -- pad posé DANS le cellier natif
+        under_cellar = 0,   -- chambre sous le cellier (par le dessous)
+        classic = 0,        -- chambre classique sous maison sans cellier
+        deep_fallback = 0,  -- dernier recours F-20..F-45
+        giveup_native = 0,  -- abandon : sous-sol natif encombrant
+        giveup_shaft = 0,   -- abandon : aucune colonne de puits
+        dig_fail = 0,       -- dig a échoué après emerge
+    },
 }
 
 -- Copie profonde (le job natif ne doit jamais être muté par erreur)
@@ -63,20 +75,12 @@ function ht.dlog(msg)
 end
 
 --
--- emerge_area gardé : on_ok seulement si 100% des blocs émergés avec
--- succès. Signature du callback : callback(blockpos, action,
--- calls_remaining).
---
--- FIX CRITIQUE (2026-11-08) : minetest.EMERGE_OK N'EXISTE PAS. Les
--- vraies constantes du moteur (builtin/game/constants.lua de Luanti)
--- sont EMERGE_CANCELLED = 0, EMERGE_ERRORED = 1, EMERGE_FROM_MEMORY
--- = 2, EMERGE_FROM_DISK = 3, EMERGE_GENERATED = 4. L'ancien test
--- `action == minetest.EMERGE_OK` comparait donc à nil : TOUJOURS
--- faux, on_fail systématique, aucun sous-sol ni destination n'a
--- jamais été construits (les logs "emerge impossible" ~1 s après
--- chaque mise en file en témoignent). Succès = toute action >=
--- EMERGE_FROM_MEMORY (bloc chargé de la mémoire, du disque, ou
--- généré) ; échec = CANCELLED/ERRORED.
+-- emerge_area gardé : on_ok seulement si 100 % des blocs émergés
+-- avec succès. Succès = action >= EMERGE_FROM_MEMORY (bloc chargé de
+-- la mémoire, du disque ou généré -- la constante EMERGE_OK
+-- n'existe pas dans l'API Luanti, ne pas l'utiliser) ; échec =
+-- EMERGE_CANCELLED / EMERGE_ERRORED. Signature du callback :
+-- callback(blockpos, action, calls_remaining).
 --
 local EMERGE_FROM_MEMORY = core.EMERGE_FROM_MEMORY or 2
 
@@ -86,11 +90,11 @@ local function emerge_action_ok(action)
         and action >= EMERGE_FROM_MEMORY
 end
 
--- DURCI : une erreur dans un callback emerge est FATALE pour le
--- serveur (AsyncErr on_emerge_area_completion) ; on_ok et on_fail
--- sont donc toujours exécutés sous pcall. Si on_ok échoue : log
--- error + traceback puis on_fail tenté UNE fois (protégé) ; si
--- on_fail échoue : log seul. Jamais de reboucle.
+-- Une erreur dans un callback emerge est FATALE pour le serveur
+-- (AsyncErr on_emerge_area_completion) : on_ok et on_fail sont
+-- toujours exécutés sous pcall. Si on_ok échoue : log error +
+-- traceback puis on_fail tenté UNE fois (protégé) ; si on_fail
+-- échoue : log seul. Jamais de reboucle.
 --
 function ht.emerge_and_run(minp, maxp, on_ok, on_fail)
     local ok_count = 0
@@ -173,21 +177,12 @@ local function is_furniture_name(name)
 end
 
 --
--- Niveau du REZ-DE-CHAUSSÉE de la maison : fenêtre ASCENDANTE
--- y1-9 .. y1+7 (y0 = y1-4, copie du scan natif basements.lua:334
--- corrigé le 2026-11-09 -- rapport du monde "maisons" : l'échelle
--- sortait au premier étage). Le scan DESCENDANT historique élisait
--- le plancher le plus HAUT de la fenêtre : un loft, une mezzanine
--- ou un plancher d'étage passe les mêmes tests ouverts-dessus que
--- le rez-de-chaussée (lumberjack_15 : descendant y=7 élu, vrai rez à
--- y=3). Or le pad doit vivre sous le rez-de-chaussée : la boucle
--- monte depuis y1-9, le PREMIER candidat rencontré est donc le rez.
--- Sondes : centre, anneaux ±1/±2/±3 en croix et diagonales ±1 (le
--- natif élargit à ±3 : certains tapis 5x5 town_house couvrent le
--- centre). Candidat valide (filtres natifs) : marchable, non meuble,
--- non meuble DESSOUS aussi (une dalle posée sur un lit est rejetée),
--- 2 airs au-dessus, 1 marchable dessous. Retourne le y du nœud
--- plancher, ou nil + la RAISON (logs /htforce et /htcheck).
+-- Niveau du REZ-DE-CHAUSSÉE de la maison. Sondes : centre, anneaux
+-- ±1/±2/±3 en croix et diagonales ±1 (certains tapis 5x5 couvrent
+-- le centre). Candidat valide (filtres du scan natif) : marchable,
+-- non meuble, node dessous non meuble aussi, 2 airs au-dessus,
+-- 1 marchable dessous, et fondation compacte (garde anti-grotte).
+-- Retourne le y du nœud plancher, ou nil + la raison (logs /htcheck).
 --
 function ht.scan_floor_y(box)
     local cx = math.floor((box.x1 + box.x2) / 2)
@@ -199,6 +194,17 @@ function ht.scan_floor_y(box)
         {cx - 3, cz}, {cx + 3, cz}, {cx, cz - 3}, {cx, cz + 3},
         {cx - 1, cz - 1}, {cx + 1, cz + 1},
     }
+    -- Fenêtre native y0-5 .. y0+3 (y0 = y1-4, ancrage -4), balayée en
+    -- ASCENDANT : le premier candidat rencontré est le plancher le
+    -- plus bas (un plancher d'étage est au-dessus de la borne haute
+    -- et ne peut jamais être élu). Ne pas élargir vers le bas : les
+    -- dalles des celliers natifs (F-5k) y vivent -- un scan plus
+    -- profond les élirait comme "plancher" ; les maisons sans aucune
+    -- sonde valide (cellier meublé) passent par le mode sans-plancher
+    -- de process_house (patch direct du cellier).
+    -- Garde anti-grotte (foundation_solid natif simplifié) : >= 3
+    -- nodes pleins sur les 4 sous le candidat, sinon on monte vers
+    -- le candidat suivant de la colonne.
     local y0 = box.y1 - 4
     local saw_ignore = false
     for _, col in ipairs(columns) do
@@ -223,7 +229,21 @@ function ht.scan_floor_y(box)
                     and is_open_name(above1.name)
                     and is_open_name(above2.name)
                     and ht.is_walkable_name(below1.name) then
-                    return y
+                    -- fondation compacte ? (4 nodes dessous pleins)
+                    local solid = 0
+                    for dy = 1, 4 do
+                        local b = minetest.get_node_or_nil(
+                            {x = x, y = y - dy, z = z})
+                        if b and b.name ~= "air"
+                            and b.name ~= "ignore"
+                            and ht.is_walkable_name(b.name) then
+                            solid = solid + 1
+                        end
+                    end
+                    if solid >= 3 then
+                        return y
+                    end
+                    -- sol de grotte : candidat suivant (on monte)
                 end
             end
         end
@@ -231,7 +251,7 @@ function ht.scan_floor_y(box)
     if saw_ignore then
         return nil, "nodes ignore dans la fenêtre (chunk non émergé)"
     end
-    return nil, "aucun plancher valide dans la fenêtre y1-9..y1+7"
+    return nil, "aucun plancher valide dans la fenêtre y0-5..y0+3"
 end
 
 --

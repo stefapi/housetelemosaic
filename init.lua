@@ -1,14 +1,24 @@
--- housetelemosaic : sous-sol avec pad telemosaic pour chaque maison
--- nativevillages éligible, vers grotte, labyrinthe ou île cloudlands.
--- VAGUE 1 : socle (settings, api, hook, basement, file simple).
--- VAGUE 2 : providers cave/maze/sky complets, chaîne de fallback
--- entre providers, LBM + on_generated de reprise, /htmaze.
+-- housetelemosaic : un sous-sol avec pad telemosaic pour chaque maison
+-- nativevillages éligible, vers grotte, donjon, labyrinthe ou île
+-- cloudlands.
+--
+-- Modules (ordre de chargement) :
+--   settings.lua   réglages clampés (ht.settings)
+--   api.lua        utilitaires : PRNG déterministes, scan de plancher,
+--                  emerge gardé, extendeurs, liaison des pads
+--   providers/*    destinations cave, dungeon, maze, sky
+--   hook.lua       interception du placement nativevillages, choix de
+--                  destination, mise en file
+--   basement.lua   construction des sous-sols (patch cellier natif,
+--                  connexion par le dessous, chambre classique)
+--   link_queue.lua file de liaison persistante (materialize + liaison)
+--   debug.lua      commandes chat de supervision
 
 housetelemosaic = {}
 local ht = housetelemosaic
 
--- Registre des providers de destination (cave/maze/sky), rempli par
--- providers/*.lua juste après
+-- Registre des providers de destination (cave/dungeon/maze/sky),
+-- rempli par providers/*.lua juste après
 ht.providers = {}
 
 local path = minetest.get_modpath("housetelemosaic") .. "/"
@@ -24,6 +34,5 @@ dofile(path .. "basement.lua")
 dofile(path .. "link_queue.lua")
 dofile(path .. "debug.lua")
 
-minetest.log("action", "[housetelemosaic] chargé (vague 2 : providers "
-    .. "cave/maze/sky, fallbacks, reprise LBM/on_generated). "
-    .. "Installation du hook nativevillages à on_mods_loaded.")
+minetest.log("action", "[housetelemosaic] chargé ; installation du hook "
+    .. "nativevillages à on_mods_loaded")

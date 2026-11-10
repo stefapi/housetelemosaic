@@ -14,8 +14,17 @@ local ht = housetelemosaic
 -- cannibalhouse*, d'où les deux entrées). Les bâtiments civiques
 -- (étables, puits, tours...) ne portent aucun de ces préfixes.
 local PREFIXES = {
+    -- familles tribales (convention basements.lua)
     "grasslandhouse", "deserthouse", "savannahouse",
-    "icehouse", "junglehouse", "cannibalhouse", "lakehouse",
+    "icehouse", "junglehouse", "cannibalhouse",
+    -- familles élargies : les noms ne partagent pas le préfixe
+    -- grasslandhouse (town_house_large_1/2, medium, small, tiny_1/2/3,
+    -- small_house_1_0, witchhouse) ; l'exclusion "_cloudlands"
+    -- ci-dessous filtre leurs variantes d'îles flottantes
+    "grasslandtown_house", "grasslandsmall_house",
+    "savannawitchhouse",
+    -- PAS "lakehouse" : maisons sur pilotis ancrées dans l'eau (le
+    -- natif les exclut aussi) -- aucun plancher marchable dessous
 }
 
 function ht.is_eligible(job)
@@ -139,13 +148,53 @@ function ht.select_plan(job, offset, exclude)
     return nil, nil
 end
 
--- VAGUE 2 : construction du sous-sol + sélection complète (chaîne
+-- Construction du sous-sol + sélection de destination (chaîne
 -- is_available -> get_destination avec fallbacks) + mise en file ;
 -- la file (link_queue) déroule materialize + ht.link_pads.
 function ht.process_house(job)
     local tag = job.name .. " (" .. minetest.pos_to_string(job.pos) .. ")"
     local F, why = ht.scan_floor_y(job.box)
     if not F then
+        -- MODE SANS PLANCHER : toutes les sondes ont échoué (cellier
+        -- natif meublé couvrant chaque sonde) -- au lieu d'abandonner,
+        -- on tente le
+        -- PATCH DIRECT du cellier natif avec un F estimé (y1+3 :
+        -- ancrage -4 + un node de plancher ; find_native_cellar_floor
+        -- revalide chaque dalle de toute façon, une erreur d'une ou
+        -- deux nodes sur l'estimation est sans effet sur lui)
+        local box = job.box
+        local cx = math.floor((box.x1 + box.x2) / 2)
+        local cz = math.floor((box.z1 + box.z2) / 2)
+        local pad
+        if ht.find_native_cellar_floor and ht.patch_cellar then
+            local est_F = box.y1 + 3
+            local cellar = ht.find_native_cellar_floor(cx, cz, est_F, box)
+            if cellar then
+                pad = ht.patch_cellar(job, box, cellar, cx, cz)
+            end
+        end
+        if pad then
+            ht.stats.decisions.patch_cellar
+                = ht.stats.decisions.patch_cellar + 1
+            ht.stats.pads = ht.stats.pads + 1
+            ht.stats.pads_dug = ht.stats.pads_dug + 1
+            ht.last_pad_planned = pad
+            minetest.log("action", "[housetelemosaic] " .. job.name
+                .. " : plancher introuvable, cellier natif patché "
+                .. "directement, pad " .. minetest.pos_to_string(pad))
+            local plan, provider_name = ht.select_plan(job, 0)
+            if plan and provider_name then
+                ht.stats.queued = ht.stats.queued + 1
+                ht.queue.add({
+                    pad = pad,
+                    job = slim_job(job),
+                    plan = plan,
+                    provider = provider_name,
+                    tries = 0,
+                })
+            end
+            return
+        end
         ht.stats.no_floor = ht.stats.no_floor + 1
         minetest.log("action", "[housetelemosaic] abandon pour " .. tag
             .. " : " .. tostring(why))
@@ -162,7 +211,7 @@ function ht.process_house(job)
     -- position prévue du pad (le dig réel est asynchrone : emerge ;
     -- /htforce et /htcheck affichent cette position en attendant)
     ht.last_pad_planned = pad
-    -- Sélection VAGUE 2 : chaîne complète avec fallbacks
+    -- Sélection : chaîne complète avec fallbacks
     local plan, provider_name = ht.select_plan(job, 0)
     if plan and provider_name then
         ht.stats.queued = ht.stats.queued + 1
