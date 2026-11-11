@@ -156,11 +156,11 @@ end
 
 -- Meubles / escaliers : un candidat "sol" portant l'un de ces préfixes
 -- est un objet POSÉ sur le plancher, pas le plancher (le piège documenté
--- de scan_floor_y dans nativevillages/basements.lua : tapis, lits,
+-- de scan_floor_y dans biomevillages/basements.lua : tapis, lits,
 -- coffres, escaliers élus un nœud trop haut)
 local FURNITURE_PREFIXES = {
     "stairs:", "default:furnace", "default:chest", "default:bookshelf",
-    "vessels:", "nativevillages:", "wool:", "carpets:",
+    "vessels:", "biomevillages:", "wool:", "carpets:",
 }
 
 local function is_furniture_name(name)

@@ -103,7 +103,7 @@ minetest.register_chatcommand("htrelink", {
 -- /htcheck : diagnostic d'installation du pipeline, pas à pas. Les
 -- compteurs de session (ht.stats, api.lua) disent OÙ la chaîne
 -- s'arrête : si calls = 0, le hook n'est jamais déclenché (terrain
--- déjà généré : nativevillages ne construit que sur NOUVEAUX chunks,
+-- déjà généré : biomevillages ne construit que sur NOUVEAUX chunks,
 -- utiliser /htforce) ; si eligible = 0 mais calls > 0, préfixes en
 -- cause ; si pads > 0 mais pads_dug = 0, l'emerge échoue, etc.
 minetest.register_chatcommand("htcheck", {
@@ -114,9 +114,9 @@ minetest.register_chatcommand("htcheck", {
         local lines = { "[housetelemosaic] diagnostic :" }
         lines[#lines + 1] = "  mod chargé : oui"
         lines[#lines + 1] = "  hook : "
-            .. (ht._patched and ("installé sur nativevillages."
+            .. (ht._patched and ("installé sur biomevillages."
                 .. tostring(ht._patched)) or "NON installé")
-        lines[#lines + 1] = "  source nativevillages : "
+        lines[#lines + 1] = "  source biomevillages : "
             .. (ht._source or "inconnue")
         lines[#lines + 1] = "  destinations : "
             .. table.concat(ht.settings.destinations, ",")
@@ -625,7 +625,7 @@ minetest.register_chatcommand("htaudit", {
 
 -- /htscanarea [<rayon>] : RÉTROFIT des maisons déjà posées autour du
 -- joueur (le pipeline naturel n'équipe que les NOUVELLES générations).
--- Détection : mobilier nativevillages:* (liste reconstruite dynamique
+-- Détection : mobilier biomevillages:* (liste reconstruite dynamique
 -- depuis registered_nodes : résistante aux mises à jour du mod), posés
 -- en INTERIEUR par les schematics ; clusterisation par proximité XZ,
 -- chaque cluster de >= 2 meubles vaut une maison, box = empreinte des
@@ -657,13 +657,13 @@ minetest.register_chatcommand("htscanarea", {
             -- mobilier natif : liste dynamique complète
             local names = {}
             for reg in pairs(minetest.registered_nodes) do
-                if reg:sub(1, 15) == "nativevillages:" then
+                if reg:sub(1, 14) == "biomevillages:" then
                     names[#names + 1] = reg
                 end
             end
             if #names == 0 then
                 minetest.chat_send_player(name,
-                    "[housetelemosaic] aucun node nativevillages:* "
+                    "[housetelemosaic] aucun node biomevillages:* "
                     .. "enregistré : rien à détecter")
                 return
             end
@@ -677,7 +677,7 @@ minetest.register_chatcommand("htscanarea", {
             end
             if #points == 0 then
                 minetest.chat_send_player(name,
-                    "[housetelemosaic] aucun meuble nativevillages "
+                    "[housetelemosaic] aucun meuble biomevillages "
                     .. "dans le rayon : aucune maison détectée")
                 return
             end

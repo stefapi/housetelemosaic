@@ -1,9 +1,9 @@
--- hook.lua : accroche sur le flux de placement de nativevillages.
--- Monkey-patch UNIQUE de nativevillages.basements.maybe_dig_basement :
--- placement.lua run_job relit nativevillages.basements à CHAQUE appel
+-- hook.lua : accroche sur le flux de placement de biomevillages.
+-- Monkey-patch UNIQUE de biomevillages.basements.maybe_dig_basement :
+-- placement.lua run_job relit biomevillages.basements à CHAQUE appel
 -- (placement.lua:773) et l'appelle sous pcall pour chaque maison posée,
 -- APRÈS place_schematic -- la maison est donc déjà construite quand le
--- wrapper tourne. Fallback vérifié : nativevillages.dungeon.
+-- wrapper tourne. Fallback vérifié : biomevillages.dungeon.
 -- maybe_place_hidden_entrance (même convention, placement.lua:792).
 -- Sans les deux : mod inerte avec un log d'erreur explicite.
 
@@ -246,22 +246,22 @@ function ht.install_hook()
     if patch_applied() then
         return true
     end
-    if not minetest.global_exists("nativevillages") then
-        minetest.log("error", "[housetelemosaic] nativevillages absent : "
+    if not minetest.global_exists("biomevillages") then
+        minetest.log("error", "[housetelemosaic] biomevillages absent : "
             .. "mod inerte")
         return false
     end
-    local nv = nativevillages
+    local nv = biomevillages
 
     -- Marqueur de source pour /htcheck : chemin réel du mod natif
-    -- wrappé. Une seule version de nativevillages existe à la fois
-    -- (l'hypothétique doublon "nativevillages_origin" serait visible
+    -- wrappé. Une seule version de biomevillages existe à la fois
+    -- (l'hypothétique doublon "biomevillages_origin" serait visible
     -- ici : chemin différent), les deux copies présentes sur cette
     -- machine sont identiques au byte près (diff -rq vide).
-    ht._source = tostring(minetest.get_modpath("nativevillages"))
+    ht._source = tostring(minetest.get_modpath("biomevillages"))
 
     -- Point d'accroche principal, VÉRIFIÉ dans placement.lua:773-780 :
-    -- relit nativevillages.basements à chaque run_job
+    -- relit biomevillages.basements à chaque run_job
     local Bs = nv.basements
     if type(Bs) == "table" and type(Bs.maybe_dig_basement) == "function" then
         local original = Bs.maybe_dig_basement
@@ -279,7 +279,7 @@ function ht.install_hook()
         end
         ht._patched = "basements.maybe_dig_basement"
         minetest.log("action", "[housetelemosaic] hook installé sur "
-            .. "nativevillages.basements.maybe_dig_basement")
+            .. "biomevillages.basements.maybe_dig_basement")
         return true
     end
 
@@ -305,7 +305,7 @@ function ht.install_hook()
         end
         ht._patched = "dungeon.maybe_place_hidden_entrance"
         minetest.log("action", "[housetelemosaic] hook installé sur "
-            .. "nativevillages.dungeon.maybe_place_hidden_entrance "
+            .. "biomevillages.dungeon.maybe_place_hidden_entrance "
             .. "(fallback, basements absent)")
         return true
     end
@@ -313,12 +313,12 @@ function ht.install_hook()
     -- Aucun point d'accroche réel : impossible de détecter les
     -- schematics posés autrement, le mod reste inerte
     minetest.log("error", "[housetelemosaic] aucun point d'accroche "
-        .. "trouvé dans nativevillages (basements.maybe_dig_basement "
+        .. "trouvé dans biomevillages (basements.maybe_dig_basement "
         .. "et dungeon.maybe_place_hidden_entrance absents) : mod inerte")
     return false
 end
 
--- telemosaic (dépendance dure) et nativevillages (dépendance dure du
+-- telemosaic (dépendance dure) et biomevillages (dépendance dure du
 -- mod.conf) sont chargés avant housetelemosaic ; l'ordre dépend du nom,
 -- le patch est donc posé une fois tous les mods initialisés
 minetest.register_on_mods_loaded(function()

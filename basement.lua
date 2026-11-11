@@ -243,7 +243,7 @@ end
 -- excavation, aucun puits : la trappe et l'échelle natives
 -- desservent déjà la maison. Retourne pad_pos ou nil (cellier trop
 -- encombré). Synchrone : la zone du cellier est dans l'emprise de la
--- maison, déjà émergée par nativevillages.
+-- maison, déjà émergée par biomevillages.
 ht.patch_cellar = function(job, box, cellar_floor, cx, cz)
     if not N_BEACON then
         return nil
@@ -571,7 +571,7 @@ end
 -- Point d'entrée (appelé par ht.process_house). Retourne pad_pos dès
 -- que la géométrie est arrêtée (le dig lui-même attend l'emerge : la
 -- zone du sous-sol déborde en dessous de l'emprise schematic que
--- nativevillages a déjà émergée).
+-- biomevillages a déjà émergée).
 --
 function ht.build_basement(job, F)
     local box = job.box

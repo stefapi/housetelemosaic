@@ -1,5 +1,5 @@
 -- housetelemosaic : un sous-sol avec pad telemosaic pour chaque maison
--- nativevillages éligible, vers grotte, donjon, labyrinthe ou île
+-- biomevillages éligible, vers grotte, donjon, labyrinthe ou île
 -- cloudlands.
 --
 -- Modules (ordre de chargement) :
@@ -7,7 +7,7 @@
 --   api.lua        utilitaires : PRNG déterministes, scan de plancher,
 --                  emerge gardé, extendeurs, liaison des pads
 --   providers/*    destinations cave, dungeon, maze, sky
---   hook.lua       interception du placement nativevillages, choix de
+--   hook.lua       interception du placement biomevillages, choix de
 --                  destination, mise en file
 --   basement.lua   construction des sous-sols (patch cellier natif,
 --                  connexion par le dessous, chambre classique)
@@ -35,4 +35,4 @@ dofile(path .. "link_queue.lua")
 dofile(path .. "debug.lua")
 
 minetest.log("action", "[housetelemosaic] chargé ; installation du hook "
-    .. "nativevillages à on_mods_loaded")
+    .. "biomevillages à on_mods_loaded")
