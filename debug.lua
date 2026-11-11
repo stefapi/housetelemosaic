@@ -39,10 +39,15 @@ local function storage_stats()
     if not storage then
         return 0, {}, 0
     end
-    -- stats:* excluded from the count: they are counters, not
-    -- queue entries
+    -- reserved prefixes excluded from the count (stats:* counters,
+    -- anchor:*/ilink:* interlink registries): they are not queue
+    -- entries -- Q.is_queue_key is the single source of truth
+    local is_queue_key = ht.queue.is_queue_key
+        or function(k)
+            return k:sub(1, 6) ~= "stats:"
+        end
     for key, raw in pairs(storage:to_table().fields) do
-        if raw ~= "" and key:sub(1, 6) ~= "stats:" then
+        if raw ~= "" and is_queue_key(key) then
             total = total + 1
             local ok, entry = pcall(core.parse_json, raw)
             if ok and type(entry) == "table" then
@@ -62,6 +67,26 @@ minetest.register_chatcommand("htstats", {
             .. " entry(ies), " .. unlinked .. " cumulative giveup(s)" }
         for p, n in pairs(by_provider) do
             lines[#lines + 1] = "  provider " .. p .. ": " .. n
+        end
+        if type(ht.interlink_stats) == "function" then
+            local il = ht.interlink_stats()
+            lines[#lines + 1] = "  interlink: " .. il.created
+                .. " created / " .. il.attempted
+                .. " attempted / " .. il.failed
+                .. " failed (persistent), anchors: "
+                .. il.anchors .. " registered"
+            if ht.stats.interlink_seen then
+                lines[#lines + 1] = "  interlink (session): "
+                    .. ht.stats.interlink_seen
+                    .. " anchor(s) offered | chain min/max "
+                    .. ht.settings.interlink_min_chain .. "/"
+                    .. ht.settings.interlink_max_chain
+                    .. ", max branches "
+                    .. ht.settings.interlink_branches
+                    .. " (P(k) ~ 4^-k), targets "
+                    .. table.concat(
+                        ht.settings.interlink_targets, ",")
+            end
         end
         if ht.last_basement and ht.last_basement.pad then
             local meta = minetest.get_meta(ht.last_basement.pad)
@@ -88,8 +113,12 @@ minetest.register_chatcommand("htrelink", {
             return false, "[housetelemosaic] mod storage unavailable"
         end
         local n = 0
+        local is_queue_key = ht.queue.is_queue_key
+            or function(k)
+                return k:sub(1, 6) ~= "stats:"
+            end
         for id, raw in pairs(storage:to_table().fields) do
-            if raw ~= "" and id:sub(1, 6) ~= "stats:"
+            if raw ~= "" and is_queue_key(id)
                 and ht.queue.process_entry(id) then
                 n = n + 1
             end
@@ -140,6 +169,13 @@ minetest.register_chatcommand("htcheck", {
             .. ", attempt failures: " .. s.mat_fail
             .. ", switches: " .. s.provider_switch
             .. ", unlinked (storage cumulative): " .. unlinked_total
+        if s.interlink_created then
+            lines[#lines + 1] = "  interlink (session): created "
+                .. s.interlink_created .. " / attempted "
+                .. s.interlink_attempted .. " / failed "
+                .. s.interlink_failed .. " | anchors offered "
+                .. (s.interlink_seen or 0)
+        end
         local d = s.decisions or {}
         lines[#lines + 1] = "  basement decisions: cellar patched "
             .. (d.patch_cellar or 0) .. ", under cellar "
@@ -326,6 +362,33 @@ minetest.register_chatcommand("htdebug", {
         ht.settings.debug = not ht.settings.debug
         local state = ht.settings.debug and "enabled" or "disabled"
         return true, "[housetelemosaic] debug " .. state
+    end,
+})
+
+-- /htinterlink <x> <y> <z>: replays the FULL interlink flow on an
+-- existing DUNGEON arrival beacon (bypasses the chance draw and
+-- the ilink: anti-duplicate guard -- the production trigger keeps
+-- both). Diagnoses "interlinks never happen": run it on the
+-- destination beacon of a house->dungeon link and follow the log.
+-- (server priv)
+minetest.register_chatcommand("htinterlink", {
+    description = "housetelemosaic: forces an interlink from the "
+        .. "dungeon beacon at <x> <y> <z>",
+    privs = { server = true },
+    func = function(name, param)
+        if type(ht.force_interlink) ~= "function" then
+            return false, "[housetelemosaic] interlink not loaded"
+        end
+        local xs, ys, zs = param:match(
+            "^%s*(-?%d+)%s+(-?%d+)%s+(-?%d+)%s*$")
+        if not xs then
+            return false, "usage: /htinterlink <x> <y> <z> "
+                .. "(position of a dungeon arrival beacon)"
+        end
+        local anchor = {x = tonumber(xs), y = tonumber(ys),
+            z = tonumber(zs)}
+        local ok, msg = ht.force_interlink(anchor)
+        return ok, "[housetelemosaic] " .. msg
     end,
 })
 

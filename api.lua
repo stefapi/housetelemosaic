@@ -10,6 +10,8 @@ local ht = housetelemosaic
 ht.BASE_SEED = 0xBA5E4E7   -- generic stream of the mod
 ht.HOUSE_SEED = 0x4A0E5EED -- chance draw per house
 ht.MAZE_SEED = 0xAB1E      -- maze generator stream
+ht.LINK_SEED = 0x11ACCE1   -- interlink draw per destination anchor
+                           -- (interlink.lua)
 
 -- World seed, read on demand (may change between worlds)
 function ht.world_seed()
@@ -41,6 +43,11 @@ ht.stats = {
     mat_fail = 0,         -- materialize/link failures (attempts)
     provider_switch = 0,  -- fallback provider switches
     unlinked = 0,         -- definitive giveups (session)
+    -- interlink feature (interlink.lua): second beacon placed in a
+    -- linked dungeon towards another structure
+    interlink_attempted = 0, -- draws passed -> enqueue attempted
+    interlink_created = 0,   -- interlinks established (session)
+    interlink_failed = 0,    -- soft failures + definitive giveups
     -- breakdown of build_basement decisions (diagnosing
     -- "chance 1.0 but rare pads": who makes the decision, and where
     -- it fails) -- /htcheck

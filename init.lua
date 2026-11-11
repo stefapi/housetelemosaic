@@ -12,6 +12,8 @@
 --   basement.lua   basement construction (native cellar patch,
 --                  connect-from-below, classic room)
 --   link_queue.lua persistent link queue (materialize + linking)
+--   interlink.lua  interlinks between structures (dungeon ->
+--                  dungeon/cave/sky second beacons)
 --   debug.lua      supervision chat commands
 
 housetelemosaic = {}
@@ -32,6 +34,7 @@ dofile(path .. "providers/sky.lua")
 dofile(path .. "hook.lua")
 dofile(path .. "basement.lua")
 dofile(path .. "link_queue.lua")
+dofile(path .. "interlink.lua")
 dofile(path .. "debug.lua")
 
 minetest.log("action", "[housetelemosaic] loaded; biomevillages hook "

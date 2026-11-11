@@ -38,6 +38,23 @@ S.sky_search_radius = num("housetelemosaic_sky_search_radius", 512, 0, 2048)
 S.max_extenders = num("housetelemosaic_max_extenders", 12, 0, 64)
 S.debug = minetest.settings:get_bool("housetelemosaic_debug", false)
 
+-- Interlink feature: with a probability, a dungeon that just
+-- received a house link also gets a second beacon pointing to
+-- another structure (see interlink.lua)
+S.interlink_enabled = minetest.settings:get_bool(
+    "housetelemosaic_interlink_enabled", true)
+S.interlink_min_dist = num("housetelemosaic_interlink_min_dist",
+    32, 16, 256)
+S.interlink_min_chain = num("housetelemosaic_interlink_min_chain",
+    2, 1, 8)
+S.interlink_max_chain = num("housetelemosaic_interlink_max_chain",
+    4, 1, 16)
+S.interlink_branches = num("housetelemosaic_interlink_branches",
+    1, 1, 4)
+if S.interlink_max_chain < S.interlink_min_chain then
+    S.interlink_max_chain = S.interlink_min_chain
+end
+
 -- Choice mode: anything other than "random" means "ordered"
 local mode = minetest.settings:get("housetelemosaic_dest_mode") or "ordered"
 S.dest_mode = (mode == "random") and "random" or "ordered"
@@ -63,5 +80,23 @@ if #list == 0 then
     list[1] = "maze"
 end
 S.destinations = list
+
+-- Interlink target list: same parsing, but restricted to
+-- dungeon/cave/sky (an interlink always starts FROM a dungeon;
+-- cave<->sky links are out of scope). An empty list simply
+-- disables the feature (no forced default)
+local valid_ilink = { dungeon = true, cave = true, sky = true }
+local seen_ilink = {}
+local ilist = {}
+local raw_ilink = minetest.settings:get(
+    "housetelemosaic_interlink_targets") or "dungeon,cave,sky"
+for token in string.gmatch(raw_ilink .. ",", "([^,]*),") do
+    token = token:gsub("^%s+", ""):gsub("%s+$", "")
+    if valid_ilink[token] and not seen_ilink[token] then
+        seen_ilink[token] = true
+        ilist[#ilist + 1] = token
+    end
+end
+S.interlink_targets = ilist
 
 ht.settings = S

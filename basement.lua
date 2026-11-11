@@ -640,9 +640,9 @@ function ht.build_basement(job, F)
         --    from below -- 9x9 room UNDER the low slab, ladder
         --    hole pierced through the slab:
         --    house -> native trapdoor -> cellar -> ladder -> room.
-        cellar_floor = find_native_cellar_floor(cx, cz, F, box)
+        cellar_floor = ht.find_native_cellar_floor(cx, cz, F, box)
         if cellar_floor then
-            local pad = patch_cellar(job, box, cellar_floor, cx, cz)
+            local pad = ht.patch_cellar(job, box, cellar_floor, cx, cz)
             if pad then
                 ht.stats.pads_dug = ht.stats.pads_dug + 1
                 ht.stats.decisions.patch_cellar

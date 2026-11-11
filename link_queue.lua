@@ -49,6 +49,16 @@ local function entry_key(pad)
     return core.pos_to_string(pad)
 end
 
+-- Storage key namespaces: queue entries are keyed by plain position
+-- strings; "stats:" (counters), "anchor:" and "ilink:" (interlink
+-- registries, interlink.lua) are reserved and never processed as
+-- entries
+function Q.is_queue_key(id)
+    return id:sub(1, 6) ~= "stats:"
+        and id:sub(1, 7) ~= "anchor:"
+        and id:sub(1, 6) ~= "ilink:"
+end
+
 -- Serialization: job, pad, plan and tries must only contain
 -- positions, numbers, strings and flat lists (contract honored:
 -- slim_job on the hook side, JSON-safe plans on the provider side)
@@ -75,6 +85,11 @@ local function safe_after(delay, fn)
         end
     end)
 end
+
+-- exposed for interlink.lua: protected deferral (identical to the
+-- queue's own retries) and entry persistence
+Q.defer = safe_after
+Q.save_entry = save_entry
 
 function Q.add(entry)
     if not entry or not entry.pad or not entry.provider then
@@ -164,12 +179,45 @@ local function handle_entry(id, entry)
                 .. " purged: no pad beacon at this position ("
                 .. pad_node.name .. " after " .. entry.waits
                 .. " checks)")
-            purge(id, entry, "unlinked")
+            if entry.kind == "interlink" then
+                -- silent purge: purge() would bump the house
+                -- pipeline's unlinked counter and write the wrong
+                -- meta on an interlink beacon (interlink.lua owns
+                -- its own stats and metas)
+                storage:set_string(id, "")
+                local m = core.get_meta(entry.pad)
+                if m then
+                    m:set_string("housetelemosaic:interlink", "failed")
+                end
+                if ht.stats.interlink_failed then
+                    ht.stats.interlink_failed =
+                        ht.stats.interlink_failed + 1
+                end
+                if type(ht.note_interlink_failed) == "function" then
+                    pcall(ht.note_interlink_failed)
+                end
+            else
+                purge(id, entry, "unlinked")
+            end
         else
             save_entry(id, entry)
             safe_after(5, function()
                 Q.process_entry(id)
             end)
+        end
+        return
+    end
+    -- interlink entries (interlink.lua): the generic pad-presence
+    -- checks above have run, the flow is then routed to the
+    -- dedicated handler -- retries, persistence, inflight guard and
+    -- the resume paths stay shared with the queue
+    if entry.kind == "interlink" then
+        if type(ht.run_interlink_entry) == "function" then
+            ht.run_interlink_entry(id, entry)
+        else
+            minetest.log("warning", "[housetelemosaic] interlink "
+                .. "entry without handler, purged: " .. id)
+            storage:set_string(id, "")
         end
         return
     end
@@ -196,6 +244,31 @@ local function handle_entry(id, entry)
                     .. "for " .. id .. " (provider " .. entry.provider
                     .. ", destination "
                     .. minetest.pos_to_string(dest_pos) .. ")")
+                -- optional hooks (interlink.lua): anchor registry +
+                -- interlink trigger -- same pattern as
+                -- ht.note_unlinked (function field, pcall). A hook
+                -- error NEVER breaks the link itself; it is logged
+                -- (not swallowed) so the interlink pipeline stays
+                -- diagnosable
+                if type(ht.note_anchor) == "function" then
+                    local okh, errh = pcall(ht.note_anchor,
+                        entry.provider, dest_pos)
+                    if not okh then
+                        minetest.log("warning", "[housetelemosaic] "
+                            .. "note_anchor hook failed: "
+                            .. tostring(errh))
+                    end
+                end
+                if entry.kind ~= "interlink"
+                    and type(ht.on_link_established) == "function" then
+                    local okh, errh = pcall(ht.on_link_established,
+                        entry, dest_pos)
+                    if not okh then
+                        minetest.log("warning", "[housetelemosaic] "
+                            .. "on_link_established hook failed: "
+                            .. tostring(errh))
+                    end
+                end
             else
                 entry.tries = entry.tries + 1
                 ht.stats.mat_fail = ht.stats.mat_fail + 1
@@ -241,8 +314,8 @@ end
 -- Processing of ONE entry (public: the LBM re-triggers a specific
 -- entry when its beacon loads; /htrelink uses it too)
 function Q.process_entry(id)
-    -- stats:* fields (e.g. stats:unlinked) are not entries
-    if id:sub(1, 6) == "stats:" then
+    -- reserved prefixes (stats:, anchor:, ilink:) are not entries
+    if not Q.is_queue_key(id) then
         return false
     end
     local raw = storage:get_string(id)
@@ -266,10 +339,11 @@ function Q.process()
         return
     end
     processing = true
-    -- stats:* excluded: they are counters, not entries (otherwise
-    -- Q.process would purge them as "corrupted")
+    -- reserved prefixes excluded: stats:* are counters and
+    -- anchor:*/ilink:* are interlink registries, not entries
+    -- (otherwise Q.process would purge them as "corrupted")
     for id, raw in pairs(storage:to_table().fields) do
-        if raw ~= "" and id:sub(1, 6) ~= "stats:" then
+        if raw ~= "" and Q.is_queue_key(id) then
             local ok, entry = pcall(core.parse_json, raw)
             if ok and type(entry) == "table" and entry.pad then
                 handle_entry(id, entry)
@@ -290,7 +364,7 @@ end
 function Q.count()
     local n = 0
     for k, raw in pairs(storage:to_table().fields) do
-        if raw ~= "" and k:sub(1, 6) ~= "stats:" then
+        if raw ~= "" and Q.is_queue_key(k) then
             n = n + 1
         end
     end

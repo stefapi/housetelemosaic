@@ -42,6 +42,42 @@ housetelemosaic_basement_depth (Basement depth) int 5 3 15
 # Search radius for a cloudlands island (nodes, 0 to disable)
 housetelemosaic_sky_search_radius (Cloudlands search radius) int 512 0 2048
 
+# Global switch for the interlink feature: with a probability, a
+# cave or dungeon that just received a house link also gets a
+# second beacon pointing to another structure (dungeon, cave or
+# cloudland)
+housetelemosaic_interlink_enabled (Enable interlinks) bool true
+
+# Ordered list of allowed interlink targets, comma-separated
+# (valid values: dungeon, cave, sky). The list is scanned in order
+# when looking for a target around the dungeon
+housetelemosaic_interlink_targets (Interlink targets) string dungeon,cave,sky
+
+# Minimum 3D distance between the dungeon anchor and the interlink
+# target (nodes): pushes the target search window away from the
+# dungeon itself
+housetelemosaic_interlink_min_dist (Interlink minimum distance) int 32 16 256
+
+# Chain length: the first N links of every branch are created
+# WITHOUT a probability draw (forced). Combined with the target
+# type diversity rule, this guarantees that a branch visits N
+# different zone types when they exist around
+housetelemosaic_interlink_min_chain (Interlink minimum chain length) int 2 1 8
+
+# Chain length: hard limit of links per branch. A chain continues
+# from every cave/dungeon it reaches (a cloudland is terminal),
+# with a probability draw beyond min_chain, until this depth
+housetelemosaic_interlink_max_chain (Interlink maximum chain length) int 4 1 16
+
+# Maximum number of interlink beacons per anchor. The ACTUAL number
+# k is drawn per anchor with DEGRESSIVE probabilities:
+# P(0) = A, P(1) = A/4, P(2) = A/16, ... P(k) = A/4^k (A =
+# normalization constant, the law sums to 1). Most anchors stop the
+# chain (k=0); trees become rarer at each extra branch; this
+# setting only caps the law. k = 0 is overridden to 1 while the
+# branch is shorter than min_chain
+housetelemosaic_interlink_branches (Interlink branches per anchor) int 2 1 4
+
 # Maximum number of telemosaic extenders placed per pad (0 = unlimited)
 housetelemosaic_max_extenders (Maximum extenders per pad) int 12 0 64
 
