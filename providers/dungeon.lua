@@ -1,26 +1,26 @@
--- providers/dungeon.lua : destination "donjon".
--- Cible : un donjon NATIF du mapgen (mg_flags dungeons), celui-là même
--- que dungeonsplus décore de ses features (forge, bibliothèque,
--- prison, alchemy lab...) et dont il remplace le loot quand il est
--- actif -- pointer "vers dungeonsplus", c'est pointer vers une salle
--- de donjon natif. randungeon est un second avis : si aucun donjon
--- natif n'est trouvé au scan, un donjon randungeon complet est
--- généré via randungeon.make_dungeon (API publique, build_dungeon_
--- from_blocks.lua:1000) ; en dernier recours une salle voûtée
--- mossycobble est construite.
--- Signature d'un donjon natif au scan : sol en cobble / mossycobble /
--- stonebrick (les couloirs de grotte naturelle, eux, sont en roche
--- brute) surmonté d'au moins 3 nodes d'air -- exactement la signature
--- utilisée par dungeonsplus pour trouver ses salles (gennotify
--- dungeon + sols, init.lua:151).
--- Pattern général : clone de providers/cave.lua (plan léger
--- sérialisable, emerge_and_run, VoxelManip lecture seule, ancrage
--- beacon, fallbacks en cascade).
+-- providers/dungeon.lua: "dungeon" destination.
+-- Target: a NATIVE mapgen dungeon (mg_flags dungeons), the very one
+-- dungeonsplus decorates with its features (forge, library,
+-- prison, alchemy lab...) and whose loot it replaces when active
+-- -- pointing "towards dungeonsplus" means pointing to a native
+-- dungeon room. randungeon is a second opinion: if no native
+-- dungeon is found at the scan, a full randungeon dungeon is
+-- generated via randungeon.make_dungeon (public API,
+-- build_dungeon_from_blocks.lua:1000); as a last resort a
+-- mossycobble vaulted room is built.
+-- Signature of a native dungeon at the scan: floor in cobble /
+-- mossycobble / stonebrick (natural cave corridors, on the other
+-- hand, are raw rock) topped by at least 3 air nodes -- exactly
+-- the signature used by dungeonsplus to find its rooms (gennotify
+-- dungeon + floors, init.lua:151).
+-- General pattern: clone of providers/cave.lua (serializable light
+-- plan, emerge_and_run, read-only VoxelManip, beacon anchoring,
+-- cascading fallbacks).
 
 local ht = housetelemosaic
 
 --
--- Nodes résolus une fois au chargement (pattern basement.lua)
+-- Nodes resolved once at load time (basement.lua pattern)
 --
 local function pick(names, what)
     for _, n in ipairs(names) do
@@ -28,38 +28,38 @@ local function pick(names, what)
             return n
         end
     end
-    minetest.log("warning", "[housetelemosaic] node indisponible pour "
-        .. what .. " (essayés : " .. table.concat(names, ", ") .. ")")
+    minetest.log("warning", "[housetelemosaic] node unavailable for "
+        .. what .. " (tried: " .. table.concat(names, ", ") .. ")")
     return nil
 end
 
-local N_BEACON = pick({"telemosaic:beacon_off"}, "beacon donjon")
+local N_BEACON = pick({"telemosaic:beacon_off"}, "dungeon beacon")
 local N_MOSSY = pick({"default:mossycobble", "default:cobble"},
-    "sol donjon de secours")
+    "fallback dungeon ground")
 local N_COBBLE = pick({"default:cobble", "default:stone"},
-    "sol donjon de secours (bord)")
+    "fallback dungeon ground (edge)")
 local N_WALL = pick({"default:stonebrick", "default:stone"},
-    "murs donjon de secours")
-local N_TORCH_WALL = pick({"default:torch_wall"}, "torche murale donjon")
-local N_TORCH = pick({"default:torch"}, "torche de sol donjon")
+    "fallback dungeon walls")
+local N_TORCH_WALL = pick({"default:torch_wall"}, "dungeon wall torch")
+local N_TORCH = pick({"default:torch"}, "dungeon floor torch")
 
--- randungeon est-il présent ? (dépendance optionnelle)
+-- Is randungeon present? (optional dependency)
 local RANDUNGEON = minetest.get_modpath("randungeon") ~= nil
     and type(randungeon) == "table"
     and type(randungeon.make_dungeon) == "function"
 
--- Donjons natifs activés dans mg_flags ?
+-- Native dungeons enabled in mg_flags?
 local function native_dungeons_on()
     local flags = minetest.get_mapgen_setting("mg_flags") or ""
     return flags:find("dungeons", 1, true) ~= nil
 end
 
--- Sols caractéristiques des donjons natifs : content_ids résolus à la
--- demande (lazy : après on_mods_loaded). Un mod de remplacement de
--- nodes (loottest0 etc.) peut renommer ces nodes : on accepte donc
--- TOUT node enregistré dont le nom contient "mossycobble" ou qui est
--- exactement default:cobble / default:stonebrick, plus les variants
--- "desert_" et "sandstone" des donjons natifs.
+-- Characteristic floors of native dungeons: content_ids resolved
+-- on demand (lazy: after on_mods_loaded). A node replacement mod
+-- (loottest0 etc.) may rename these nodes: we therefore accept ANY
+-- registered node whose name contains "mossycobble" or that is
+-- exactly default:cobble / default:stonebrick, plus the "desert_"
+-- and "sandstone" variants of native dungeons.
 local floor_cids = nil
 
 local function ensure_floor_cids()
@@ -80,7 +80,7 @@ local function ensure_floor_cids()
     add("default:sandstonebrick")
     add("default:desert_sandstone_brick")
     add("default:silver_sandstone_brick")
-    -- toute variante de remplacement nommée *mossycobble*
+    -- any replacement variant named *mossycobble*
     for name in pairs(minetest.registered_nodes) do
         if name:find("mossycobble", 1, true) then
             add(name)
@@ -89,7 +89,7 @@ local function ensure_floor_cids()
     return floor_cids
 end
 
--- Tables content_id -> {walkable, liquid} (pattern cave.lua)
+-- Tables content_id -> {walkable, liquid} (cave.lua pattern)
 local cid_info = nil
 
 local function ensure_cid_info()
@@ -106,18 +106,18 @@ local function ensure_cid_info()
     return cid_info
 end
 
--- Directions horizontales {dx, dz, param2} : convention wallmounted,
--- param2 = direction du MUR de support DEPUIS la torche (2 = x+,
--- 3 = x-, 4 = z+, 5 = z-)
+-- Horizontal directions {dx, dz, param2}: wallmounted convention,
+-- param2 = direction of the supporting WALL FROM the torch
+-- (2 = x+, 3 = x-, 4 = z+, 5 = z-)
 local WALL_DIRS = {
-    {1, 0, 2},   -- mur à l'est   (+X) -> param2 2
-    {-1, 0, 3},  -- mur à l'ouest (-X) -> param2 3
-    {0, 1, 4},   -- mur au sud    (+Z) -> param2 4
-    {0, -1, 5},  -- mur au nord   (-Z) -> param2 5
+    {1, 0, 2},   -- wall east   (+X) -> param2 2
+    {-1, 0, 3},  -- wall west   (-X) -> param2 3
+    {0, 1, 4},   -- wall south  (+Z) -> param2 4
+    {0, -1, 5},  -- wall north  (-Z) -> param2 5
 }
 
--- Torche murale sur le premier mur plein trouvé autour de pos, sinon
--- torche de sol si le dessous est marchable (clone cave.lua)
+-- Wall torch on the first solid wall found around pos, otherwise
+-- floor torch if the node below is walkable (cave.lua clone)
 local function place_torch(pos, floor_y, ox, oz)
     for _, d in ipairs(WALL_DIRS) do
         local t = {x = pos.x + d[1], y = pos.y, z = pos.z + d[2]}
@@ -148,13 +148,14 @@ local function place_torch(pos, floor_y, ox, oz)
 end
 
 --
--- Scan VoxelManip lecture seule : salles de donjon natif.
--- Même squelette que cave.lua scan_pockets, avec le prédicat de sol
--- spécifique : le node qui termine une série d'au moins 3 airs (en
--- descendant) doit être un SOL DE DONJON (floor_cids) et le node
--- sous le sol non liquide ; le plafond (node au-dessus de la série)
--- marchable et non liquide ; carré 3x3 ouvert aux niveaux sol+1 et
--- sol+2 (pose du beacon + exigence telemosaic).
+-- Read-only VoxelManip scan: native dungeon rooms.
+-- Same skeleton as cave.lua scan_pockets, with the specific
+-- ground predicate: the node ending a series of at least 3 airs
+-- (going down) must be a DUNGEON FLOOR (floor_cids) and the node
+-- under the ground non-liquid; the ceiling (node above the
+-- series) walkable and non-liquid; 3x3 square open at levels
+-- ground+1 and ground+2 (beacon placement + telemosaic
+-- requirement).
 --
 local function scan_dungeon_floors(plan)
     local info = ensure_cid_info()
@@ -168,8 +169,8 @@ local function scan_dungeon_floors(plan)
     local y_top = plan.scan_max_y
     local y_bot = plan.scan_min_y
 
-    -- échantillonnage identique à cave.lua : la fenêtre donjon est
-    -- bornée à 48 de rayon au plan, le pas reste léger
+    -- sampling identical to cave.lua: the dungeon window is
+    -- bounded to 48 radius in the plan, the step stays light
     local side = plan.maxp.x - plan.minp.x + 1
     local step = 1
     if side > 48 then
@@ -242,9 +243,10 @@ local function scan_dungeon_floors(plan)
     return candidates
 end
 
--- Ancrage d'un candidat : beacon + 2 airs garantis (le 3x3 a déjà été
--- validé au scan, on force au cas où le terrain aurait bougé entre le
--- scan et la pose -- écart nul en pratique, défense en profondeur)
+-- Anchoring of a candidate: beacon + 2 guaranteed airs (the 3x3
+-- was already validated at the scan, we force them in case the
+-- terrain changed between the scan and the placement -- zero gap
+-- in practice, defense in depth)
 local function anchor_candidate(c)
     if not N_BEACON then
         return nil
@@ -267,31 +269,32 @@ local function anchor_candidate(c)
 end
 
 --
--- Donjon randungeon de secours : appel de l'API publique make_dungeon
--- (synchronome si la zone est chargée -- notre emerge_and_run préalable
--- l'a émergie -- sinon elle reprend via son emerge interne et le
--- callback de la file retiendra l'essai). Paramètres modestes pour
--- rester rapide : width 4 (40x40), 3 niveaux, matériaux aléatoires.
--- L'entrée du donjon (pos + quelques niveaux) reçoit le beacon ; la
--- position d'arrivée exacte du joueur est gérée par telemosaic
--- (dest.y+0.5) sur le sol du palier d'entrée.
+-- Fallback randungeon dungeon: call of the public API make_dungeon
+-- (synchronous if the zone is loaded -- our preliminary
+-- emerge_and_run has emerged it -- otherwise it resumes via its
+-- internal emerge and the queue's callback will count the
+-- attempt). Modest parameters to stay fast: width 4 (40x40),
+-- 3 levels, random materials.
+-- The dungeon entrance (pos + a few levels) receives the beacon;
+-- the player's exact arrival position is handled by telemosaic
+-- (dest.y+0.5) on the entrance landing floor.
 --
 local function build_randungeon(plan)
     if not RANDUNGEON then
         return nil
     end
-    -- point d'ancrage du donjon : centre de la fenêtre, sous le
-    -- niveau de scan (le donjon creuse vers le bas depuis pos.y)
+    -- dungeon anchor point: center of the window, below the
+    -- scan level (the dungeon digs downward from pos.y)
     local pos = {
         x = plan.center.x,
         y = plan.scan_min_y + 10,
         z = plan.center.z,
     }
-    -- zone émergée par le materialize (fenêtre + marge make_dungeon
-    -- de 60 : émerge déjà large, on garde la fenêtre du plan)
+    -- zone emerged by the materialize (window + make_dungeon
+    -- margin of 60: already emerges wide, we keep the plan window)
     local ok, err = pcall(randungeon.make_dungeon, pos,
-        4,                    -- width (4 blocs = 40 nodes)
-        nil, nil, nil, nil, nil, nil, -- matériaux : aléatoires
+        4,                    -- width (4 blocks = 40 nodes)
+        nil, nil, nil, nil, nil, nil, -- materials: random
         12,                   -- dungeon_deph
         true,                 -- rim_sealed
         3,                    -- dungeon_levels
@@ -303,21 +306,23 @@ local function build_randungeon(plan)
         "randungeon:dungeon_treasure", -- treasure_block
         nil)                  -- dungeon_id
     if not ok then
-        minetest.log("warning", "[housetelemosaic] dungeon : "
-            .. "randungeon.make_dungeon a échoué : " .. tostring(err))
+        minetest.log("warning", "[housetelemosaic] dungeon: "
+            .. "randungeon.make_dungeon failed: " .. tostring(err))
         return nil
     end
-    -- palier d'arrivée : quelques nodes sous le point d'ancrage, au
-    -- centre du donjon ; make_dungeon creuse son entrée à pos.y -
-    -- top_deph ; on pose le beacon sur le premier sol plein trouvé en
-    -- descendant depuis pos.y - 2 (le toit du donjon est à ~top_deph)
+    -- arrival landing: a few nodes below the anchor point, at the
+    -- dungeon center; make_dungeon digs its entrance at pos.y -
+    -- top_deph; we place the beacon on the first solid ground
+    -- found going down from pos.y - 2 (the dungeon roof is at
+    -- ~top_deph)
     for dy = 2, 80 do
         local y = pos.y - dy
         local n = minetest.get_node_or_nil(
             {x = pos.x, y = y, z = pos.z})
         if n and ht.is_walkable_name(n.name) then
-            -- sol trouvé : beacon posé dessus (le donjon randungeon
-            -- est décoré de torches par lui-même, on n'en ajoute pas)
+            -- ground found: beacon placed on it (the randungeon
+            -- dungeon is decorated with torches by itself, we add
+            -- none)
             if N_BEACON then
                 local dest = {x = pos.x, y = y + 1, z = pos.z}
                 minetest.set_node(dest, {name = N_BEACON})
@@ -330,9 +335,10 @@ local function build_randungeon(plan)
 end
 
 --
--- Salle voûtée de dernier recours : intérieur 7x7 (emprise 9x9), sol
--- mossycobble, murs/plafond stonebrick -- l'esthétique donjon natif.
--- Une seule passe VoxelManip (pattern cave.lua build_artificial).
+-- Last-resort vaulted room: 7x7 interior (9x9 footprint),
+-- mossycobble ground, stonebrick walls/ceiling -- the native
+-- dungeon look. A single VoxelManip pass (cave.lua
+-- build_artificial pattern).
 --
 local function build_fallback_room(plan)
     if not (N_BEACON and N_MOSSY and N_WALL) then
@@ -388,9 +394,10 @@ local function build_fallback_room(plan)
 end
 
 --
--- Travail complet une fois émergé : scan donjons natifs, puis
--- randungeon, puis salle voûtée. Sélection déterministe (clone
--- cave.lua : tri par distance, tie-break PcgRandom(plan.rng_seed)).
+-- Complete work once emerged: native dungeon scan, then
+-- randungeon, then vaulted room. Deterministic selection
+-- (cave.lua clone: sort by distance, tie-break
+-- PcgRandom(plan.rng_seed)).
 --
 local function work_emerged(plan)
     local candidates = scan_dungeon_floors(plan)
@@ -406,39 +413,39 @@ local function work_emerged(plan)
         end
         local dest = anchor_candidate(chosen)
         if dest then
-            ht.dlog("dungeon : donjon natif ancré à "
+            ht.dlog("dungeon: native dungeon anchored at "
                 .. minetest.pos_to_string(dest) .. " (" .. #candidates
-                .. " salle(s) trouvée(s))")
+                .. " room(s) found)")
             return dest
         end
     end
     local dest = build_randungeon(plan)
     if dest then
-        ht.dlog("dungeon : donjon randungeon généré, entrée "
+        ht.dlog("dungeon: randungeon dungeon generated, entrance "
             .. minetest.pos_to_string(dest))
         return dest
     end
     dest = build_fallback_room(plan)
     if dest then
-        ht.dlog("dungeon : salle voûtée de secours à "
+        ht.dlog("dungeon: fallback vaulted room at "
             .. minetest.pos_to_string(dest))
     end
     return dest
 end
 
 ht.providers.dungeon = {
-    -- disponible si les donjons natifs existent (mg_flags dungeons,
-    -- décorés par dungeonsplus s'il est actif) OU si randungeon peut
-    -- en générer un
+    -- available if native dungeons exist (mg_flags dungeons,
+    -- decorated by dungeonsplus if active) OR if randungeon can
+    -- generate one
     is_available = function(job)
         return native_dungeons_on() or RANDUNGEON
     end,
 
-    -- Plan léger sérialisable JSON (clone cave.lua). Fenêtre de scan
-    -- bornée à 48 de rayon (les donjons natifs sont courants, inutile
-    -- de scanner loin : une salle suffit), profondeur [y1-200 ;
-    -- y1-25] clampée >= -280 / <= -10 (les donjons natifs vivent
-    -- entre ~-2550 et la surface, la fenêtre reste raisonnable).
+    -- JSON-serializable light plan (cave.lua clone). Scan window
+    -- bounded to 48 radius (native dungeons are common, no need
+    -- to scan far: one room is enough), depth [y1-200; y1-25]
+    -- clamped >= -280 / <= -10 (native dungeons live between
+    -- ~-2550 and the surface, the window stays reasonable).
     get_destination = function(job, rng)
         local box = job.box
         local cx = math.floor((box.x1 + box.x2) / 2)
@@ -448,9 +455,9 @@ ht.providers.dungeon = {
         local y_high = math.min(box.y1 - 25, -10)
         local y_low = math.max(box.y1 - 200, -280)
 
-        -- niveau de la salle/randungeon de secours : sous la fenêtre
-        -- de scan, au moins 40 sous la base (anti-collision grotte
-        -- artificielle à y1-30 : on descend plus bas)
+        -- fallback room/randungeon level: below the scan window,
+        -- at least 40 under the base (anti-collision with the
+        -- artificial cave at y1-30: we go down lower)
         local fy = math.max(y_low - 40, -300)
         if fy > box.y1 - 40 then
             fy = box.y1 - 40
@@ -486,8 +493,8 @@ ht.providers.dungeon = {
                 callback(true, dest)
             else
                 if not ok then
-                    minetest.log("warning", "[housetelemosaic] dungeon : "
-                        .. "échec de matérialisation : " .. tostring(dest))
+                    minetest.log("warning", "[housetelemosaic] dungeon: "
+                        .. "materialization failed: " .. tostring(dest))
                 end
                 callback(false, nil)
             end

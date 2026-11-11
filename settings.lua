@@ -1,5 +1,5 @@
--- settings.lua : lecture unique des réglages (voir settingtypes.txt),
--- clampés à leurs bornes documentées, exportés dans ht.settings.
+-- settings.lua: one-time read of the settings (see settingtypes.txt),
+-- clamped to their documented bounds, exported in ht.settings.
 
 local ht = housetelemosaic
 
@@ -13,8 +13,9 @@ local function clamp(n, lo, hi)
     return n
 end
 
--- Nombre (int ou float) avec défaut et bornes ; une valeur saisie
--- invalide retombe sur le défaut (pattern setting_int de basements.lua)
+-- Number (int or float) with default and bounds; an invalid
+-- entered value falls back to the default (setting_int pattern of
+-- basements.lua)
 local function num(name, default, lo, hi)
     return clamp(tonumber(minetest.settings:get(name) or "") or default,
         lo, hi)
@@ -37,21 +38,21 @@ S.sky_search_radius = num("housetelemosaic_sky_search_radius", 512, 0, 2048)
 S.max_extenders = num("housetelemosaic_max_extenders", 12, 0, 64)
 S.debug = minetest.settings:get_bool("housetelemosaic_debug", false)
 
--- Mode de choix : tout ce qui n'est pas "random" vaut "ordered"
+-- Choice mode: anything other than "random" means "ordered"
 local mode = minetest.settings:get("housetelemosaic_dest_mode") or "ordered"
 S.dest_mode = (mode == "random") and "random" or "ordered"
 
--- Liste des destinations : split sur les virgules, trim de chaque
--- token, filtrage des valeurs valides, dédoublonnage ; si la liste
--- finale est vide on garde au moins "maze" (destination toujours
--- constructible, sans dépendance optionnelle)
+-- Destination list: split on commas, trim each token, filter
+-- valid values, deduplicate; if the final list is empty we keep at
+-- least "maze" (an always buildable destination, with no optional
+-- dependency)
 local valid = { cave = true, dungeon = true, maze = true, sky = true }
 local seen = {}
 local list = {}
 local raw = minetest.settings:get("housetelemosaic_destinations")
     or "cave,maze,sky"
 for token in string.gmatch(raw .. ",", "([^,]*),") do
-    -- trim manuel (pas de string.trim en Lua 5.1)
+    -- manual trim (no string.trim in Lua 5.1)
     token = token:gsub("^%s+", ""):gsub("%s+$", "")
     if valid[token] and not seen[token] then
         seen[token] = true

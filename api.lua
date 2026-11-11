@@ -1,61 +1,61 @@
--- api.lua : utilitaires partagés (PRNG déterministes, scans, extendeurs,
--- liaison des deux pads). ht.link_pads est consommé par link_queue.lua.
+-- api.lua: shared utilities (deterministic PRNGs, scans, extenders,
+-- linking of the two pads). ht.link_pads is consumed by link_queue.lua.
 
 local ht = housetelemosaic
 
 --
--- Graines des tirages déterministes (convention basements.lua : un flux
--- PcgRandom par usage, mélangé à la graine du monde)
+-- Seeds for deterministic draws (basements.lua convention: one
+-- PcgRandom stream per use, mixed with the world seed)
 --
-ht.BASE_SEED = 0xBA5E4E7   -- flux générique du mod
-ht.HOUSE_SEED = 0x4A0E5EED -- tirage chance par maison
-ht.MAZE_SEED = 0xAB1E      -- flux du générateur de labyrinthe
+ht.BASE_SEED = 0xBA5E4E7   -- generic stream of the mod
+ht.HOUSE_SEED = 0x4A0E5EED -- chance draw per house
+ht.MAZE_SEED = 0xAB1E      -- maze generator stream
 
--- Graine du monde, lue à la demande (peut changer entre mondes)
+-- World seed, read on demand (may change between worlds)
 function ht.world_seed()
     return tonumber(minetest.get_mapgen_setting("seed")) or 0
 end
 
--- PRNG déterministe par site : même monde + même empreinte = mêmes
--- tirages, un chunk régénéré reconstruit le même sous-sol
+-- Deterministic per-site PRNG: same world + same footprint = same
+-- draws, a regenerated chunk rebuilds the same basement
 function ht.house_rng(x1, y1, z1, salt)
     return PcgRandom(ht.world_seed() + salt, x1, y1, z1)
 end
 
--- Compteurs de session (photo du run courant, NON persistés ; les
--- compteurs durables restent dans le mod storage, cf /htstats).
--- /htcheck les affiche pour localiser où le pipeline s'arrête :
--- chaque étape (appel wrapper -> éligible -> tirage -> plancher ->
--- pad -> creusé -> file -> liaison) a son compteur.
+-- Session counters (snapshot of the current run, NOT persisted;
+-- durable counters live in mod storage, see /htstats).
+-- /htcheck displays them to locate where the pipeline stops:
+-- each step (wrapper call -> eligible -> draw -> floor -> pad ->
+-- dug -> queue -> link) has its own counter.
 ht.stats = {
-    calls = 0,            -- appels du wrapper (tout bâtiment posé)
-    ineligible = 0,       -- bâtiments non maison (étables, puits...)
-    eligible = 0,         -- maisons éligibles vues
-    chance_skip = 0,      -- éligibles écartées au tirage chance
-    floors = 0,           -- planchers détectés
-    no_floor = 0,         -- abandons "pas de plancher"
-    pads = 0,             -- pads programmés (process_house)
-    pads_dug = 0,         -- sous-sols RÉELLEMENT creusés (après emerge)
-    queued = 0,           -- entrées mises en file
-    linked = 0,           -- liaisons établies
-    mat_fail = 0,         -- échecs materialize/liaison (essais)
-    provider_switch = 0,  -- bascules de provider de secours
-    unlinked = 0,         -- abandons définitifs (session)
-    -- répartition des décisions de build_basement (diagnostic
-    -- "chance 1.0 mais pads rares" : qui prend la décision, et où
-    -- elle échoue) -- /htcheck
+    calls = 0,            -- wrapper calls (every placed building)
+    ineligible = 0,       -- non-house buildings (barns, wells...)
+    eligible = 0,         -- eligible houses seen
+    chance_skip = 0,      -- eligible rejected by the chance draw
+    floors = 0,           -- detected floors
+    no_floor = 0,         -- "no floor" giveups
+    pads = 0,             -- scheduled pads (process_house)
+    pads_dug = 0,         -- basements ACTUALLY dug (after emerge)
+    queued = 0,           -- entries enqueued
+    linked = 0,           -- links established
+    mat_fail = 0,         -- materialize/link failures (attempts)
+    provider_switch = 0,  -- fallback provider switches
+    unlinked = 0,         -- definitive giveups (session)
+    -- breakdown of build_basement decisions (diagnosing
+    -- "chance 1.0 but rare pads": who makes the decision, and where
+    -- it fails) -- /htcheck
     decisions = {
-        patch_cellar = 0,   -- pad posé DANS le cellier natif
-        under_cellar = 0,   -- chambre sous le cellier (par le dessous)
-        classic = 0,        -- chambre classique sous maison sans cellier
-        deep_fallback = 0,  -- dernier recours F-20..F-45
-        giveup_native = 0,  -- abandon : sous-sol natif encombrant
-        giveup_shaft = 0,   -- abandon : aucune colonne de puits
-        dig_fail = 0,       -- dig a échoué après emerge
+        patch_cellar = 0,   -- pad placed INSIDE the native cellar
+        under_cellar = 0,   -- room under the cellar (from below)
+        classic = 0,        -- classic room under a house without cellar
+        deep_fallback = 0,  -- last resort F-20..F-45
+        giveup_native = 0,  -- giveup: cluttered native basement
+        giveup_shaft = 0,   -- giveup: no shaft column
+        dig_fail = 0,       -- dig failed after emerge
     },
 }
 
--- Copie profonde (le job natif ne doit jamais être muté par erreur)
+-- Deep copy (the native job must never be mutated by mistake)
 function ht.deep_copy(t)
     if type(t) ~= "table" then
         return t
@@ -67,7 +67,7 @@ function ht.deep_copy(t)
     return copy
 end
 
--- Log de debug (uniquement si housetelemosaic_debug)
+-- Debug log (only if housetelemosaic_debug)
 function ht.dlog(msg)
     if ht.settings.debug then
         minetest.log("action", "[housetelemosaic] " .. tostring(msg))
@@ -75,11 +75,11 @@ function ht.dlog(msg)
 end
 
 --
--- emerge_area gardé : on_ok seulement si 100 % des blocs émergés
--- avec succès. Succès = action >= EMERGE_FROM_MEMORY (bloc chargé de
--- la mémoire, du disque ou généré -- la constante EMERGE_OK
--- n'existe pas dans l'API Luanti, ne pas l'utiliser) ; échec =
--- EMERGE_CANCELLED / EMERGE_ERRORED. Signature du callback :
+-- Guarded emerge_area: on_ok only if 100% of the blocks emerged
+-- successfully. Success = action >= EMERGE_FROM_MEMORY (block loaded
+-- from memory, from disk or generated -- the EMERGE_OK constant
+-- does not exist in the Luanti API, do not use it); failure =
+-- EMERGE_CANCELLED / EMERGE_ERRORED. Callback signature:
 -- callback(blockpos, action, calls_remaining).
 --
 local EMERGE_FROM_MEMORY = core.EMERGE_FROM_MEMORY or 2
@@ -90,11 +90,11 @@ local function emerge_action_ok(action)
         and action >= EMERGE_FROM_MEMORY
 end
 
--- Une erreur dans un callback emerge est FATALE pour le serveur
--- (AsyncErr on_emerge_area_completion) : on_ok et on_fail sont
--- toujours exécutés sous pcall. Si on_ok échoue : log error +
--- traceback puis on_fail tenté UNE fois (protégé) ; si on_fail
--- échoue : log seul. Jamais de reboucle.
+-- An error in an emerge callback is FATAL for the server
+-- (AsyncErr on_emerge_area_completion): on_ok and on_fail are
+-- always executed under pcall. If on_ok fails: error log +
+-- traceback then on_fail attempted ONCE (protected); if on_fail
+-- fails: log only. Never reloop.
 --
 function ht.emerge_and_run(minp, maxp, on_ok, on_fail)
     local ok_count = 0
@@ -108,14 +108,14 @@ function ht.emerge_and_run(minp, maxp, on_ok, on_fail)
             if ok_count == total then
                 local ok, err = pcall(on_ok)
                 if not ok then
-                    minetest.log("error", "[housetelemosaic] on_ok a "
-                        .. "échoué après emerge : " .. tostring(err)
+                    minetest.log("error", "[housetelemosaic] on_ok "
+                        .. "failed after emerge: " .. tostring(err)
                         .. "\n" .. debug.traceback())
                     if on_fail then
                         local ok2, err2 = pcall(on_fail)
                         if not ok2 then
                             minetest.log("error", "[housetelemosaic] "
-                                .. "on_fail a aussi échoué : "
+                                .. "on_fail also failed: "
                                 .. tostring(err2))
                         end
                     end
@@ -123,14 +123,14 @@ function ht.emerge_and_run(minp, maxp, on_ok, on_fail)
             elseif on_fail then
                 local ok, err = pcall(on_fail)
                 if not ok then
-                    minetest.log("error", "[housetelemosaic] on_fail a "
-                        .. "échoué (emerge partiel " .. ok_count .. "/"
-                        .. total .. " blocs) : " .. tostring(err)
+                    minetest.log("error", "[housetelemosaic] on_fail "
+                        .. "failed (partial emerge " .. ok_count .. "/"
+                        .. total .. " blocks): " .. tostring(err)
                         .. "\n" .. debug.traceback())
                 end
             else
-                minetest.log("warning", "[housetelemosaic] emerge partiel ("
-                    .. ok_count .. "/" .. total .. " blocs) autour de "
+                minetest.log("warning", "[housetelemosaic] partial emerge ("
+                    .. ok_count .. "/" .. total .. " blocks) around "
                     .. minetest.pos_to_string(minp))
             end
         end
@@ -138,7 +138,7 @@ function ht.emerge_and_run(minp, maxp, on_ok, on_fail)
 end
 
 --
--- Prédicats de nodes (gardes nil systématiques)
+-- Node predicates (systematic nil guards)
 --
 
 function ht.is_walkable_name(name)
@@ -154,10 +154,10 @@ local function is_open_name(name)
     return def ~= nil and not def.walkable
 end
 
--- Meubles / escaliers : un candidat "sol" portant l'un de ces préfixes
--- est un objet POSÉ sur le plancher, pas le plancher (le piège documenté
--- de scan_floor_y dans biomevillages/basements.lua : tapis, lits,
--- coffres, escaliers élus un nœud trop haut)
+-- Furniture / stairs: a "floor" candidate bearing one of these
+-- prefixes is an object PLACED on the floor, not the floor (the
+-- documented pitfall of scan_floor_y in biomevillages/basements.lua:
+-- carpets, beds, chests, stairs elected one node too high)
 local FURNITURE_PREFIXES = {
     "stairs:", "default:furnace", "default:chest", "default:bookshelf",
     "vessels:", "biomevillages:", "wool:", "carpets:",
@@ -177,12 +177,12 @@ local function is_furniture_name(name)
 end
 
 --
--- Niveau du REZ-DE-CHAUSSÉE de la maison. Sondes : centre, anneaux
--- ±1/±2/±3 en croix et diagonales ±1 (certains tapis 5x5 couvrent
--- le centre). Candidat valide (filtres du scan natif) : marchable,
--- non meuble, node dessous non meuble aussi, 2 airs au-dessus,
--- 1 marchable dessous, et fondation compacte (garde anti-grotte).
--- Retourne le y du nœud plancher, ou nil + la raison (logs /htcheck).
+-- GROUND FLOOR level of the house. Probes: center, rings
+-- ±1/±2/±3 in cross shape and ±1 diagonals (some 5x5 carpets cover
+-- the center). Valid candidate (native scan filters): walkable,
+-- not furniture, node below not furniture either, 2 air above,
+-- 1 walkable below, and compact foundation (anti-cave guard).
+-- Returns the floor node y, or nil + the reason (logs /htcheck).
 --
 function ht.scan_floor_y(box)
     local cx = math.floor((box.x1 + box.x2) / 2)
@@ -194,17 +194,17 @@ function ht.scan_floor_y(box)
         {cx - 3, cz}, {cx + 3, cz}, {cx, cz - 3}, {cx, cz + 3},
         {cx - 1, cz - 1}, {cx + 1, cz + 1},
     }
-    -- Fenêtre native y0-5 .. y0+3 (y0 = y1-4, ancrage -4), balayée en
-    -- ASCENDANT : le premier candidat rencontré est le plancher le
-    -- plus bas (un plancher d'étage est au-dessus de la borne haute
-    -- et ne peut jamais être élu). Ne pas élargir vers le bas : les
-    -- dalles des celliers natifs (F-5k) y vivent -- un scan plus
-    -- profond les élirait comme "plancher" ; les maisons sans aucune
-    -- sonde valide (cellier meublé) passent par le mode sans-plancher
-    -- de process_house (patch direct du cellier).
-    -- Garde anti-grotte (foundation_solid natif simplifié) : >= 3
-    -- nodes pleins sur les 4 sous le candidat, sinon on monte vers
-    -- le candidat suivant de la colonne.
+    -- Native window y0-5 .. y0+3 (y0 = y1-4, anchor -4), swept in
+    -- ASCENDING order: the first candidate met is the lowest
+    -- floor (an upper-storey floor is above the high bound and can
+    -- never be elected). Do not widen downward: the slabs of native
+    -- cellars (F-5k) live there -- a deeper scan would elect them
+    -- as "floor"; houses without any valid probe (furnished cellar)
+    -- go through the floorless mode of process_house (direct cellar
+    -- patch).
+    -- Anti-cave guard (simplified native foundation_solid): >= 3
+    -- solid nodes out of the 4 below the candidate, otherwise move
+    -- up to the next candidate of the column.
     local y0 = box.y1 - 4
     local saw_ignore = false
     for _, col in ipairs(columns) do
@@ -229,7 +229,7 @@ function ht.scan_floor_y(box)
                     and is_open_name(above1.name)
                     and is_open_name(above2.name)
                     and ht.is_walkable_name(below1.name) then
-                    -- fondation compacte ? (4 nodes dessous pleins)
+                    -- compact foundation? (4 solid nodes below)
                     local solid = 0
                     for dy = 1, 4 do
                         local b = minetest.get_node_or_nil(
@@ -243,23 +243,23 @@ function ht.scan_floor_y(box)
                     if solid >= 3 then
                         return y
                     end
-                    -- sol de grotte : candidat suivant (on monte)
+                    -- cave floor: next candidate (move up)
                 end
             end
         end
     end
     if saw_ignore then
-        return nil, "nodes ignore dans la fenêtre (chunk non émergé)"
+        return nil, "ignore nodes in the window (chunk not emerged)"
     end
-    return nil, "aucun plancher valide dans la fenêtre y0-5..y0+3"
+    return nil, "no valid floor in the y0-5..y0+3 window"
 end
 
 --
--- Extendeurs telemosaic
+-- Telemosaic extenders
 --
 
--- Palier d'extendeur disponible : three (portée 80) sinon two (20)
--- sinon one (5) ; la formule du besoin garde la portée correspondante
+-- Available extender tier: three (range 80) else two (20) else
+-- one (5); the need formula keeps the matching range
 local function resolve_extender()
     local tiers = {
         {"telemosaic:extender_three", telemosaic.extender_ranges[3] or 80},
@@ -274,9 +274,9 @@ local function resolve_extender()
     return nil, 0
 end
 
--- Nombre d'extendeurs nécessaires pour couvrir dist depuis la portée
--- de base du beacon ; clampé par max_extenders (0 = illimité). Le clamp
--- peut rendre la liaison impossible (portée insuffisante) : warning.
+-- Number of extenders needed to cover dist from the beacon base
+-- range; clamped by max_extenders (0 = unlimited). The clamp can
+-- make the link impossible (insufficient range): warning.
 function ht.compute_extenders_needed(dist)
     local range = telemosaic.beacon_range or 20
     if dist <= range then
@@ -290,17 +290,17 @@ function ht.compute_extenders_needed(dist)
     local max_n = ht.settings.max_extenders
     if max_n > 0 and needed > max_n then
         minetest.log("warning", "[housetelemosaic] " .. needed
-            .. " extendeurs nécessaires pour une liaison à "
-            .. string.format("%.0f", dist) .. " nœuds, clampé à "
-            .. max_n .. " (liaison possiblement impossible)")
+            .. " extenders needed for a link at "
+            .. string.format("%.0f", dist) .. " nodes, clamped to "
+            .. max_n .. " (link may be impossible)")
         needed = max_n
     end
     return needed
 end
 
--- Ordre spiral (du centre vers l'extérieur) des 48 cases de la zone
--- 7x7 autour du beacon, centre exclu -- check_beacon de telemosaic ne
--- compte que les extendeurs à +/-3 XZ et y-1..y du beacon
+-- Spiral order (center outward) of the 48 cells of the 7x7 area
+-- around the beacon, center excluded -- telemosaic's check_beacon
+-- only counts extenders at +/-3 XZ and y-1..y of the beacon
 local SPIRAL = {}
 do
     local by_ring = {}
@@ -332,29 +332,29 @@ do
     end
 end
 
--- Matériaux de dalle posés par CE mod (basement : cobble ; maze/sky :
--- stone_block). Les pads encastrés exigent des extendeurs affleurants
--- eux aussi : une cellule de notre propre dalle est donc remplaçable.
--- STRICTEMENT limité à ces deux noms : jamais la roche naturelle ni
--- les murs (un extender dans un mur y ferait une blessure visuelle et
--- un trou possible si le node n'est pas walkable).
+-- Slab materials placed by THIS mod (basement: cobble; maze/sky:
+-- stone_block). Embedded pads require flush extenders too: a cell
+-- of our own slab is therefore replaceable.
+-- STRICTLY limited to these two names: never natural rock nor
+-- walls (an extender in a wall would make a visual wound and a
+-- possible hole if the node is not walkable).
 local EMBED_FLOOR_OK = {
     ["default:cobble"] = true,
     ["default:stone_block"] = true,
 }
 
--- Pose count extendeurs en spirale carrée autour de pos, au même y,
--- dans les nœuds constructibles (air / buildable_to) ou dans une
--- cellule de dalle posée par le mod (pad encastré, cf EMBED_FLOOR_OK).
--- Retourne le nombre réellement posé.
+-- Place count extenders in a square spiral around pos, at the same y,
+-- in buildable nodes (air / buildable_to) or in a slab cell placed
+-- by the mod (embedded pad, see EMBED_FLOOR_OK).
+-- Returns the number actually placed.
 function ht.place_extenders_around(pos, count)
     if count <= 0 then
         return 0
     end
     local name = resolve_extender()
     if not name then
-        minetest.log("warning", "[housetelemosaic] aucun extendeur "
-            .. "telemosaic enregistré, liaison courte seulement")
+        minetest.log("warning", "[housetelemosaic] no telemosaic "
+            .. "extender registered, short link only")
         return 0
     end
     local placed = 0
@@ -379,10 +379,10 @@ function ht.place_extenders_around(pos, count)
 end
 
 --
--- Liaison des deux pads : extendeurs posés des deux côtés selon la
--- distance, destinations programmées dans les deux sens (si
--- return_enabled), vérification get_destination après chaque écriture.
--- Retourne true si les deux liaisons demandées sont en place.
+-- Linking of the two pads: extenders placed on both sides according
+-- to the distance, destinations programmed in both directions (if
+-- return_enabled), get_destination check after each write.
+-- Returns true if both requested links are in place.
 --
 function ht.link_pads(pad, dest)
     local dist = vector.distance(pad, dest)
@@ -390,23 +390,23 @@ function ht.link_pads(pad, dest)
     if needed > 0 then
         local n1 = ht.place_extenders_around(pad, needed)
         local n2 = ht.place_extenders_around(dest, needed)
-        ht.dlog("extendeurs posés : " .. n1 .. " (maison) + " .. n2
-            .. " (destination) pour " .. string.format("%.0f", dist)
-            .. " nœuds")
+        ht.dlog("extenders placed: " .. n1 .. " (house) + " .. n2
+            .. " (destination) for " .. string.format("%.0f", dist)
+            .. " nodes")
     end
     local ok = true
     pcall(telemosaic.set_destination, pad, dest)
     if not telemosaic.get_destination(pad) then
-        minetest.log("warning", "[housetelemosaic] destination non "
-            .. "enregistrée sur le pad maison "
+        minetest.log("warning", "[housetelemosaic] destination not "
+            .. "registered on the house pad "
             .. minetest.pos_to_string(pad))
         ok = false
     end
     if ht.settings.return_enabled then
         pcall(telemosaic.set_destination, dest, pad)
         if not telemosaic.get_destination(dest) then
-            minetest.log("warning", "[housetelemosaic] lien retour non "
-                .. "enregistré sur le pad destination "
+            minetest.log("warning", "[housetelemosaic] return link not "
+                .. "registered on the destination pad "
                 .. minetest.pos_to_string(dest))
             ok = false
         end

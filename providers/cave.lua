@@ -1,25 +1,25 @@
--- providers/cave.lua : destination "grotte".
--- Phase 1 (get_destination) : plan léger sérialisable = fenêtre de scan
--- (rayon ht.settings.cave_radius autour du centre XZ de la maison, de
--- box.y1-60 à box.y1-20, clampée y >= -200 et y <= -1) + niveau de
--- secours floor_y_fallback (box.y1 - cave_depth, clampé > -300 et
--- au moins 26 sous la base de la maison : le sous-sol du mod descend
--- au pire à y1-16, l'entrée randungeon à y1-18) + rng_seed borné à
--- 2^31-1 pour trancher les égalités de distance de façon déterministe
--- ET rester exact après sérialisation JSON (un entier 64 bits perdrait
--- sa précision).
--- Phase 2 (materialize) : emerge_and_run de l'union fenêtre + salle
--- de secours, PUIS une seule passe VoxelManip en LECTURE SEULE qui
--- repère les "poches d'air" habitables ; si aucune poche (ou fallback
--- seul possible) : salle 9x9 creusée/construite en une passe VoxelManip
--- d'écriture. La décision naturelle/artificielle est ainsi prise sur
--- l'état RÉEL du terrain après émergence, pas sur un pronostic.
+-- providers/cave.lua: "cave" destination.
+-- Phase 1 (get_destination): serializable light plan = scan window
+-- (radius ht.settings.cave_radius around the house XZ center, from
+-- box.y1-60 to box.y1-20, clamped y >= -200 and y <= -1) +
+-- fallback level floor_y_fallback (box.y1 - cave_depth, clamped
+-- > -300 and at least 26 under the house base: the mod's basement
+-- goes down at worst to y1-16, the randungeon entrance to y1-18) +
+-- rng_seed bounded to 2^31-1 to break distance ties
+-- deterministically AND stay exact after JSON serialization (a
+-- 64-bit integer would lose precision).
+-- Phase 2 (materialize): emerge_and_run of the union window +
+-- fallback room, THEN a single READ-ONLY VoxelManip pass that
+-- spots livable "air pockets"; if no pocket (or fallback alone
+-- possible): 9x9 room dug/built in a single write VoxelManip
+-- pass. The natural/artificial decision is thus made on the REAL
+-- terrain state after emergence, not on a forecast.
 
 local ht = housetelemosaic
 
 --
--- Nodes résolus une fois au chargement (pattern basement.lua : chaîne
--- de fallback + warning si absent)
+-- Nodes resolved once at load time (basement.lua pattern: fallback
+-- chain + warning if absent)
 --
 local function pick(names, what)
     for _, n in ipairs(names) do
@@ -27,22 +27,22 @@ local function pick(names, what)
             return n
         end
     end
-    minetest.log("warning", "[housetelemosaic] node indisponible pour "
-        .. what .. " (essayés : " .. table.concat(names, ", ") .. ")")
+    minetest.log("warning", "[housetelemosaic] node unavailable for "
+        .. what .. " (tried: " .. table.concat(names, ", ") .. ")")
     return nil
 end
 
-local N_BEACON = pick({"telemosaic:beacon_off"}, "beacon grotte")
-local N_STONE = pick({"default:stone"}, "murs grotte artificielle")
+local N_BEACON = pick({"telemosaic:beacon_off"}, "cave beacon")
+local N_STONE = pick({"default:stone"}, "artificial cave walls")
 local N_COBBLE = pick({"default:cobble", "default:stone"},
-    "sol grotte artificielle")
-local N_TORCH_WALL = pick({"default:torch_wall"}, "torche murale grotte")
-local N_TORCH = pick({"default:torch"}, "torche de sol grotte")
+    "artificial cave ground")
+local N_TORCH_WALL = pick({"default:torch_wall"}, "cave wall torch")
+local N_TORCH = pick({"default:torch"}, "cave floor torch")
 
--- Tables content_id -> {walkable, liquid}, construites À LA DEMANDE
--- (lazy : au premier materialize, donc après on_mods_loaded, tous les
--- nodes des autres mods sont enregistrés). Un cid absent de la table
--- (mod désinstallé) est traité comme non marchable/non liquide.
+-- Tables content_id -> {walkable, liquid}, built ON DEMAND
+-- (lazy: at the first materialize, hence after on_mods_loaded, all
+-- the nodes of the other mods are registered). A cid missing from
+-- the table (uninstalled mod) is treated as non-walkable/non-liquid.
 local cid_info = nil
 
 local function ensure_cid_info()
@@ -59,22 +59,23 @@ local function ensure_cid_info()
     return cid_info
 end
 
--- Directions horizontales {dx, dz, param2} : la torche est posée à
--- (pos + d) et le mur attendu à (pos + 2*d). Convention wallmounted
--- officielle (cf. nativevillages basements.lua ring_wallmounted,
--- et default dir_to_wallmounted) : param2 = direction du MUR de
--- support DEPUIS la torche -- 2 = x+, 3 = x-, 4 = z+, 5 = z- ;
--- un mur à l'est (+X) de la torche -> param2 = 2.
+-- Horizontal directions {dx, dz, param2}: the torch is placed at
+-- (pos + d) and the expected wall at (pos + 2*d). Official
+-- wallmounted convention (cf. nativevillages basements.lua
+-- ring_wallmounted, and default dir_to_wallmounted): param2 =
+-- direction of the supporting WALL FROM the torch -- 2 = x+,
+-- 3 = x-, 4 = z+, 5 = z-; a wall east (+X) of the torch ->
+-- param2 = 2.
 local WALL_DIRS = {
-    {1, 0, 2},   -- mur à l'est   (+X) -> param2 2
-    {-1, 0, 3},  -- mur à l'ouest (-X) -> param2 3
-    {0, 1, 4},   -- mur au sud    (+Z) -> param2 4
-    {0, -1, 5},  -- mur au nord   (-Z) -> param2 5
+    {1, 0, 2},   -- wall east   (+X) -> param2 2
+    {-1, 0, 3},  -- wall west   (-X) -> param2 3
+    {0, 1, 4},   -- wall south  (+Z) -> param2 4
+    {0, -1, 5},  -- wall north  (-Z) -> param2 5
 }
 
--- Torche murale sur le premier mur plein trouvé autour de pos, sinon
--- torche de sol posée à (pos + ox/oz) si le dessous est marchable.
--- Retourne true si une torche a été posée.
+-- Wall torch on the first solid wall found around pos, otherwise
+-- floor torch placed at (pos + ox/oz) if the node below is
+-- walkable. Returns true if a torch was placed.
 local function place_torch(pos, floor_y, ox, oz)
     for _, d in ipairs(WALL_DIRS) do
         local t = {x = pos.x + d[1], y = pos.y, z = pos.z + d[2]}
@@ -105,27 +106,27 @@ local function place_torch(pos, floor_y, ox, oz)
 end
 
 --
--- Scan VoxelManip lecture seule : poches d'air habitables.
--- Chaque colonne (x,z) échantillonnée est parcourue de haut en bas en
--- indices précalculés (idx -= ystride) : pas de find_nodes_in_area,
--- aucun appel par node. Une SÉRIE d'au moins 3 nodes ouverts (non
--- marchables et non liquides) consécutifs devient candidate si :
---   - le node qui termine la série en descendant (le sol) est
---     marchable et non liquide,
---   - le node SOUS le sol (idx + ystride, sous le
---     node bloquant) est non liquide (sol sec,
---     poches inondées rejetées),
---   - le PLAFOND (node au-dessus de la série, idx +
---     (air_run+1)*ystride) est marchable et non
---     liquide,
---   - un carré 3x3 aux niveaux sol+1/sol+2 est entièrement ouvert
---     (surface de pose du beacon ; garantit aussi les 2 nodes non
---     marchables au-dessus qu'exige telemosaic.is_valid_destination).
--- "Ouvert" plutôt que strictement "air" : l'herbe et les plantes de
--- grotte restent des surfaces d'arrivée valides, seul compte le
--- prédicat marchable/liquide. Un index qui sortirait du VoxelArea
--- (série touchant le bord émergé) donne data[hors bornes] = nil ->
--- prédicat nil -> candidat ignoré, sans erreur Lua.
+-- Read-only VoxelManip scan: livable air pockets.
+-- Each sampled column (x,z) is walked top-down over
+-- precomputed indices (idx -= ystride): no find_nodes_in_area,
+-- no per-node calls. A SERIES of at least 3 consecutive open
+-- nodes (non-walkable and non-liquid) becomes a candidate if:
+--   - the node ending the series going down (the ground) is
+--     walkable and non-liquid,
+--   - the node UNDER the ground (idx + ystride, under the
+--     blocking node) is non-liquid (dry ground, flooded
+--     pockets rejected),
+--   - the CEILING (node above the series, idx +
+--     (air_run+1)*ystride) is walkable and non-liquid,
+--   - a 3x3 square at levels ground+1/ground+2 is entirely open
+--     (beacon placement surface; also guarantees the 2
+--     non-walkable nodes above required by
+--     telemosaic.is_valid_destination).
+-- "Open" rather than strictly "air": cave grass and plants remain
+-- valid arrival surfaces, only the walkable/liquid predicate
+-- matters. An index that would leave the VoxelArea (series
+-- touching the emerged edge) gives data[out of bounds] = nil ->
+-- nil predicate -> candidate ignored, without a Lua error.
 --
 local function scan_pockets(plan)
     local info = ensure_cid_info()
@@ -138,12 +139,12 @@ local function scan_pockets(plan)
     local y_top = plan.scan_max_y
     local y_bot = plan.scan_min_y
 
-    -- échantillonnage : pas 2 si le côté dépasse ~48, pas 4 au-delà
-    -- de ~96 (au réglage extrême 512x512x40 : ~1,6 M colonnes-nodes
-    -- testées au lieu de 10 M ; le pas ne dépend que des bornes du
-    -- plan, il reste déterministe). Le carré 3x3, lui, lit TOUJOURS
-    -- les colonnes voisines réelles (x-1..x+1), échantillonnées ou
-    -- non.
+    -- sampling: step 2 if the side exceeds ~48, step 4 beyond ~96
+    -- (at the extreme setting 512x512x40: ~1.6M column-nodes
+    -- tested instead of 10M; the step only depends on the plan
+    -- bounds, it stays deterministic). The 3x3 square, however,
+    -- ALWAYS reads the real neighboring columns (x-1..x+1),
+    -- sampled or not.
     local side = plan.maxp.x - plan.minp.x + 1
     local step = 1
     if side > 48 then
@@ -158,8 +159,8 @@ local function scan_pockets(plan)
 
     for x = plan.minp.x, plan.maxp.x, step do
         for z = plan.minp.z, plan.maxp.z, step do
-            -- fenêtre vide (maison très haute) : boucle interne
-            -- zéro itération, aucune candidate
+            -- empty window (very high house): inner loop zero
+            -- iterations, no candidate
             local idx = area:index(x, y_top, z)
             local air_run = 0
             for y = y_top, y_bot, -1 do
@@ -167,13 +168,13 @@ local function scan_pockets(plan)
                 if inf and not inf.walkable and not inf.liquid then
                     air_run = air_run + 1
                 else
-                    -- node bloquant à y : sol potentiel de la poche
-                    -- terminée (airs occupent y+1 .. y+air_run)
+                    -- blocking node at y: potential ground of the
+                    -- finished pocket (airs occupy y+1 .. y+air_run)
                     if air_run >= 3 and inf and inf.walkable
                         and not inf.liquid then
-                        -- plafond : node au-DESSUS de la série d'air
-                        -- (les indices CROISSENT avec y) ; sous-sol :
-                        -- node sous le sol candidat (idx + ystride)
+                        -- ceiling: node ABOVE the air series (the
+                        -- indices GROW with y); underground: node
+                        -- under the candidate ground (idx + ystride)
                         local ceil = info[
                             data[idx + (air_run + 1) * ystride]]
                         local under = info[data[idx + ystride]]
@@ -223,10 +224,10 @@ local function scan_pockets(plan)
 end
 
 --
--- Ancrage d'un candidat naturel (zone déjà émergée, set_node) :
--- beacon, 2 airs forcés, sol 3x3 complété en cobble si un voisin du
--- sol est non marchable (sol irrégulier), 2 torches (murales avec
--- repli torche de sol).
+-- Anchoring of a natural candidate (already emerged zone,
+-- set_node): beacon, 2 forced airs, 3x3 ground completed in cobble
+-- if a neighbor of the ground is non-walkable (uneven ground),
+-- 2 torches (wall-mounted with floor torch fallback).
 --
 local function anchor_candidate(c)
     if not N_BEACON then
@@ -246,7 +247,7 @@ local function anchor_candidate(c)
         end
     end
     minetest.set_node({x = c.x, y = c.y, z = c.z}, {name = N_BEACON})
-    -- 2 airs garantis au-dessus du beacon (exigence telemosaic)
+    -- 2 airs guaranteed above the beacon (telemosaic requirement)
     for ly = c.y + 1, c.y + 2 do
         local p = {x = c.x, y = ly, z = c.z}
         local n = minetest.get_node_or_nil(p)
@@ -263,21 +264,21 @@ local function anchor_candidate(c)
 end
 
 --
--- Salle artificielle de secours : intérieur 7x7, emprise 9x9, creusée
--- et habillée en UNE SEULE passe VoxelManip (set_data +
--- write_to_map(true)) à plan.floor_y_fallback :
---   floor_y        dalle de sol 9x9 cobble
---   floor_y+1..+3  anneau mural stone, intérieur air
---   floor_y+4      plafond stone
--- Le volume est déjà émergé (minp/maxp du plan couvrent l'union
--- fenêtre de scan + salle) : read_from_map y est synchrone et le
--- mapgen ne réécrira pas ces blocs (déjà générés). Beacon et torches
--- en set_node après write_to_map.
+-- Artificial fallback room: 7x7 interior, 9x9 footprint, dug
+-- and dressed in a SINGLE VoxelManip pass (set_data +
+-- write_to_map(true)) at plan.floor_y_fallback:
+--   floor_y        9x9 cobble ground slab
+--   floor_y+1..+3  stone wall ring, air interior
+--   floor_y+4      stone ceiling
+-- The volume is already emerged (the plan's minp/maxp cover the
+-- union scan window + room): read_from_map there is synchronous
+-- and the mapgen will not rewrite these blocks (already
+-- generated). Beacon and torches via set_node after write_to_map.
 --
 local function build_artificial(plan)
     if not ht.settings.cave_artificial_fallback then
-        ht.dlog("cave : aucune poche trouvée et fallback artificiel "
-            .. "désactivé")
+        ht.dlog("cave: no pocket found and artificial fallback "
+            .. "disabled")
         return nil
     end
     if not (N_BEACON and N_STONE and N_COBBLE) then
@@ -318,10 +319,10 @@ local function build_artificial(plan)
 
     local dest = {x = cx, y = fy + 1, z = cz}
     minetest.set_node(dest, {name = N_BEACON})
-    -- torches plaquées aux murs certains (bord à +/-4 en stone) :
-    -- torche ouest (cx-3) -> mur support à x- -> param2 3 ; torche
-    -- est (cx+3) -> mur à x+ -> param2 2 (convention : param2 =
-    -- direction du mur depuis la torche)
+    -- torches mounted on the certain walls (edge at +/-4 in
+    -- stone): west torch (cx-3) -> support wall at x- -> param2 3;
+    -- east torch (cx+3) -> wall at x+ -> param2 2 (convention:
+    -- param2 = direction of the wall from the torch)
     if N_TORCH_WALL then
         minetest.set_node({x = cx - 3, y = fy + 2, z = cz},
             {name = N_TORCH_WALL, param2 = 3})
@@ -337,10 +338,11 @@ local function build_artificial(plan)
 end
 
 --
--- Travail complet une fois la zone émergée : scan, sélection
--- déterministe (tri par distance au centre maison, tie-break parmi
--- les 3 meilleurs via PcgRandom(plan.rng_seed) : le même plan choisit
--- toujours le même candidat), ancrage naturel ou salle artificielle.
+-- Complete work once the zone has emerged: scan, deterministic
+-- selection (sort by distance to the house center, tie-break
+-- among the best 3 via PcgRandom(plan.rng_seed): the same plan
+-- always chooses the same candidate), natural anchoring or
+-- artificial room.
 --
 local function work_emerged(plan)
     local candidates = scan_pockets(plan)
@@ -356,47 +358,48 @@ local function work_emerged(plan)
         end
         local dest = anchor_candidate(chosen)
         if dest then
-            ht.dlog("cave : grotte naturelle ancrée à "
+            ht.dlog("cave: natural cave anchored at "
                 .. minetest.pos_to_string(dest) .. " (" .. #candidates
-                .. " poche(s) trouvée(s))")
+                .. " pocket(s) found)")
             return dest
         end
     end
     local dest = build_artificial(plan)
     if dest then
-        ht.dlog("cave : salle artificielle creusée à "
+        ht.dlog("cave: artificial room dug at "
             .. minetest.pos_to_string(dest))
     end
     return dest
 end
 
 ht.providers.cave = {
-    -- toujours disponible : le fallback artificiel est interne au
-    -- provider (et reste conditionné au setting
-    -- housetelemosaic_cave_artificial_fallback au moment de bâtir)
+    -- always available: the artificial fallback is internal to the
+    -- provider (and remains conditioned on the
+    -- housetelemosaic_cave_artificial_fallback setting at build
+    -- time)
     is_available = function(job)
         return true
     end,
 
-    -- Plan léger sérialisable JSON (positions plates + nombres).
-    -- Une maison posée très haut (y1 > 59) donne une fenêtre de scan
-    -- vide -> seule la salle artificielle (y1 - cave_depth, creusée
-    -- dans la montagne) est possible ; c'est représenté par
-    -- scan_max_y < scan_min_y (la boucle de scan ne tourne pas).
+    -- JSON-serializable light plan (flat positions + numbers).
+    -- A house placed very high (y1 > 59) yields an empty scan
+    -- window -> only the artificial room (y1 - cave_depth, dug
+    -- into the mountain) is possible; this is represented by
+    -- scan_max_y < scan_min_y (the scan loop does not run).
     get_destination = function(job, rng)
         local box = job.box
         local cx = math.floor((box.x1 + box.x2) / 2)
         local cz = math.floor((box.z1 + box.z2) / 2)
         local r = math.floor(ht.settings.cave_radius)
 
-        -- fenêtre de scan : [y1-60 ; y1-20], clampée >= -200 (borne
-        -- basse implicite) et <= -1 (toujours sous la surface)
+        -- scan window: [y1-60; y1-20], clamped >= -200 (implicit
+        -- lower bound) and <= -1 (always below the surface)
         local y_high = math.min(box.y1 - 20, -1)
         local y_low = math.max(box.y1 - 60, -200)
 
-        -- niveau de secours : cave_depth sous box.y1, clampé > -300
-        -- et au moins 26 sous la base de la maison (anti-collision
-        -- sous-sol mod / randungeon)
+        -- fallback level: cave_depth below box.y1, clamped > -300
+        -- and at least 26 under the house base (anti-collision
+        -- mod basement / randungeon)
         local fy = box.y1 - ht.settings.cave_depth
         if fy > box.y1 - 26 then
             fy = box.y1 - 26
@@ -417,13 +420,13 @@ ht.providers.cave = {
                 y = math.max(y_high, fy + 5),
                 z = cz + r,
             },
-            -- fenêtre de scan réelle (minp/maxp peuvent avoir été
-            -- étendus en y pour couvrir la salle de secours)
+            -- real scan window (minp/maxp may have been extended
+            -- in y to cover the fallback room)
             scan_min_y = y_low,
             scan_max_y = y_high,
             center = {x = cx, y = box.y1, z = cz},
             floor_y_fallback = fy,
-            -- borné à 2^31-1 : stable après un aller-retour JSON
+            -- bounded to 2^31-1: stable after a JSON round trip
             rng_seed = rng:next(0, 2147483647),
         }
     end,
@@ -435,8 +438,8 @@ ht.providers.cave = {
                 callback(true, dest)
             else
                 if not ok then
-                    minetest.log("warning", "[housetelemosaic] cave : "
-                        .. "échec de matérialisation : " .. tostring(dest))
+                    minetest.log("warning", "[housetelemosaic] cave: "
+                        .. "materialization failed: " .. tostring(dest))
                 end
                 callback(false, nil)
             end

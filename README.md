@@ -1,168 +1,174 @@
 # House Telemosaic (`housetelemosaic`)
 
-Chaque maison nativevillages éligible reçoit, selon une chance réglable (défaut : toutes), un
-sous-sol accessible par trappe et échelle, contenant un pad telemosaic bidirectionnel pointant
-vers :
+Every eligible nativevillages house receives, according to an adjustable chance (default: all of them), a
+basement accessible by trapdoor and ladder, containing a bidirectional telemosaic pad pointing to:
 
-- une **grotte** : poche d'air naturelle scannée en profondeur, avec salle artificielle de
-  secours si aucune n'est trouvée ;
-- un **donjon** : salle d'un donjon natif du mapgen (celles que `dungeonsplus` décore de
-  ses features et de son loot quand il est actif), donjon `randungeon` généré en secours,
-  ou salle voûtée mossycobble en dernier recours ;
-- un **labyrinthe** généré : recursive backtracker déterministe, avec « carotte » retirant
-  environ 8 % des murs pour créer des boucles ;
-- l'**île cloudlands** la plus proche : plateforme d'arrivée stabilisée (destination `sky`,
-  mod `cloudlands` requis).
+- a **cave**: natural air pocket scanned at depth, with an artificial fallback
+  room if none is found;
+- a **dungeon**: a room of a native mapgen dungeon (the very ones `dungeonsplus`
+  decorates with its features and loot when active), a `randungeon` dungeon
+  generated as a fallback, or a mossycobble vaulted room as a last resort;
+- a generated **maze**: deterministic recursive backtracker, with a "carrot"
+  removing about 8% of the walls to create loops;
+- the nearest **cloudlands island**: stabilized arrival platform (`sky`
+  destination, `cloudlands` mod required).
 
-Maisons éligibles : préfixes `grasslandhouse`, `deserthouse`, `savannahouse`, `icehouse`,
+Eligible houses: prefixes `grasslandhouse`, `deserthouse`, `savannahouse`, `icehouse`,
 `junglehouse`, `cannibalhouse`, `grasslandtown_house`, `grasslandsmall_house`,
-`savannawitchhouse` ; bâtiments `*_cloudlands` et maisons sur pilotis (`lakehouse`) exclus.
-Seules les maisons **nouvellement générées** sont équipées — pour les villages existants,
-utiliser `/htscanarea`.
+`savannawitchhouse`; `*_cloudlands` buildings and stilt houses (`lakehouse`) excluded.
+Only **newly generated** houses are equipped — for existing villages,
+use `/htscanarea`.
 
-## Dépendances
+## Dependencies
 
-| Mod | Statut | Rôle |
+| Mod | Status | Role |
 |-----|--------|------|
-| `telemosaic` | obligatoire | beacons, extendeurs et API de liaison |
-| `nativevillages` | obligatoire | placement des maisons (hook intercepté) |
-| `cloudlands` | optionnel | active la destination `sky` (îles flottantes) |
-| `randungeon` | optionnel | donjon complet généré en secours pour la destination `dungeon` |
-| `dungeonsplus` | optionnel | décore les donjons natifs visés par la destination `dungeon` |
-| minetest_game | attendu | nodes `default` et `doors` (trappe du puits) |
+| `telemosaic` | required | beacons, extenders and linking API |
+| `nativevillages` | required | house placement (intercepted hook) |
+| `cloudlands` | optional | enables the `sky` destination (floating islands) |
+| `randungeon` | optional | full generated dungeon as a fallback for the `dungeon` destination |
+| `dungeonsplus` | optional | decorates the native dungeons targeted by the `dungeon` destination |
+| minetest_game | expected | `default` and `doors` nodes (shaft trapdoor) |
 
-Les nodes de construction sont résolus au chargement avec des chaînes de fallback
-(`default:stonebrick` vers `default:stone`, `doors:trapdoor_wood` vers les autres trappes) :
-en cas d'absence, le mod se dégrade proprement (trou laissé ouvert, avertissements au log).
+The construction nodes are resolved at load time with fallback chains
+(`default:stonebrick` to `default:stone`, `doors:trapdoor_wood` to the other trapdoors):
+if absent, the mod degrades gracefully (hole left open, warnings in the log).
 
-## Fonctionnement
+## How it works
 
-### Interception du placement nativevillages
+### Intercepting nativevillages placement
 
-À `on_mods_loaded`, le mod encapsule `nativevillages.basements.maybe_dig_basement`
-(monkey-patch) : chaque maison posée passe dans le wrapper après la pose de la schematic.
-Sans point d'accroche connu (à défaut `nativevillages.dungeon.maybe_place_hidden_entrance`),
-le mod reste inerte avec un log d'erreur explicite.
+At `on_mods_loaded`, the mod wraps `nativevillages.basements.maybe_dig_basement`
+(monkey-patch): every placed house goes through the wrapper after the schematic
+is placed. Without a known hook point (otherwise
+`nativevillages.dungeon.maybe_place_hidden_entrance`), the mod stays inert with
+an explicit error log.
 
-La chance d'équipement est tirée de façon déterministe par maison (flux `PcgRandom` :
-graine du monde + coordonnées), ré-exécutable à l'identique sur un chunk régénéré.
+The equipment chance is drawn deterministically per house (`PcgRandom`
+stream: world seed + coordinates), re-executed identically on a regenerated
+chunk.
 
-### Sous-sol : cinq chemins de construction
+### Basement: five construction paths
 
-Par ordre de préférence, la maison reçoit son pad par l'un de ces chemins :
+In order of preference, the house receives its pad through one of these paths:
 
-1. **Patch direct du cellier natif** : quand la maison possède un cellier natif, le beacon
-   est encastré dans la dalle de son niveau le plus bas, dans une cellule libre à ≥ 3 nodes
-   de l'échelle native, sur une dalle de stabilisation 3×3 — zéro excavation, le cellier
-   devient la pièce du téléporteur.
-2. **Chambre classique 9x9** (maison sans cellier) : murs stonebrick, sol cobble, torches ;
-   plafond percé d'un puits 1x1 muni d'une échelle et fermé par une trappe dans le
-   plancher ; beacon ENCASTRÉ dans la dalle (affleurant), au coin diagonalement opposé au
-   puits — jamais au pied de l'échelle. Anti-collision avec les sous-sols natifs et les
-   entrées randungeon (sondage de 9 colonnes, décalages +4/+8, approfondissement).
-3. **Connexion par le dessous** (cellier présent mais impossible à patcher ni à éviter) :
-   la chambre s'installe sous la dalle basse du cellier, sans puits ni trappe propres —
-   un trou d'échelle percé dans sa dalle basse descend jusqu'au pad
-   (maison → trappe native → cellier → échelle → chambre du pad).
-4. **Chambre profonde** : par paliers de 5 nodes jusqu'à F-50 quand le sous-sol proche est
-   entièrement occupé (puits randungeon) — la chambre ne sonde que sa propre emprise, le
-   puits descend par une colonne de terrain plein.
-5. **Mode sans plancher** : aucune sonde du scan de plancher ne passe (cellier meublé) —
-   patch direct du cellier avec un niveau estimé.
+1. **Direct patch of the native cellar**: when the house has a native cellar,
+   the beacon is embedded in the slab of its lowest level, in a free cell at
+   ≥ 3 nodes from the native ladder, on a 3×3 stabilization slab — zero
+   excavation, the cellar becomes the teleporter room.
+2. **Classic 9x9 room** (house without cellar): stonebrick walls, cobble
+   ground, torches; ceiling pierced by a 1x1 shaft fitted with a ladder and
+   closed by a trapdoor in the floor; beacon EMBEDDED in the slab (flush), at
+   the corner diagonally opposite the shaft — never at the foot of the ladder.
+   Anti-collision with native basements and randungeon entrances (9-column
+   probing, +4/+8 offsets, deepening).
+3. **Connect from below** (cellar present but impossible to patch or avoid):
+   the room installs itself under the cellar's low slab, without its own shaft
+   or trapdoor — a ladder hole pierced through the low slab goes down to the
+   pad (house → native trapdoor → cellar → ladder → pad room).
+4. **Deep room**: in 5-node steps down to F-50 when the near underground is
+   entirely occupied (randungeon shaft) — the room only probes its own
+   footprint, the shaft goes down through a column of solid terrain.
+5. **Floorless mode**: no probe of the floor scan passes (furnished cellar) —
+   direct patch of the cellar with an estimated level.
 
-Les extendeurs longues distances sont encastrés dans la dalle comme le beacon (seuls
-`default:cobble`/`default:stone_block` posés par le mod sont remplaçables).
+Long-distance extenders are embedded in the slab like the beacon (only
+`default:cobble`/`default:stone_block` placed by the mod are replaceable).
 
-### Choix de la destination
+### Destination choice
 
-Sélection déterministe par maison (graine du monde + coordonnées) parmi les providers
-disponibles, dans l'ordre du réglage `housetelemosaic_destinations` (mode `ordered`) ou par
-rotation aléatoire déterministe (mode `random`), avec chaîne de fallback entre providers :
+Deterministic selection per house (world seed + coordinates) among the
+available providers, in the order of the `housetelemosaic_destinations` setting
+(`ordered` mode) or by deterministic random rotation (`random` mode), with a
+fallback chain between providers:
 
-- **cave** : scan VoxelManip en lecture seule des poches d'air habitables, dans un rayon
-  `cave_radius` et une fenêtre profonde (y1-60 à y1-20, clampée) ; salle artificielle 9x9
-  en secours si aucune poche n'est trouvée (désactivable) ;
-- **dungeon** : scan des sols caractéristiques des donjons natifs (cobble, mossycobble,
-  stonebrick — les mêmes salles que `dungeonsplus` décore) dans un rayon de 48 et une
-  fenêtre profonde y1-200..y1-25 ; si aucune salle n'est trouvée : donjon `randungeon`
-  généré via `randungeon.make_dungeon` (40x40, 3 niveaux, matériaux aléatoires), sinon
-  salle voûtée 9x9 mossycobble/stonebrick ;
-- **maze** : grille carrée de W cellules (emprise (2W+1)² nœuds), recursive backtracker
-  déterministe, carotte retirant `floor(W*W*0.08)` murs séparateurs (boucles), beacon posé
-  à l'entrée, enceinte ouverte au nord ;
-- **sky** : île la plus proche via `cloudlands.find_nearest_island` (rayon
-  `sky_search_radius`) ; plateforme d'arrivée stabilisée : 3x3 sur le sol réel de l'île,
-  ou plateforme artificielle 7x7 si le terrain n'y est pas.
+- **cave**: read-only VoxelManip scan of livable air pockets, within a
+  `cave_radius` radius and a deep window (y1-60 to y1-20, clamped); 9x9
+  artificial room as a fallback if no pocket is found (can be disabled);
+- **dungeon**: scan of the characteristic floors of native dungeons (cobble,
+  mossycobble, stonebrick — the very rooms `dungeonsplus` decorates) within a
+  48 radius and a deep window y1-200..y1-25; if no room is found: `randungeon`
+  dungeon generated via `randungeon.make_dungeon` (40x40, 3 levels, random
+  materials), otherwise mossycobble/stonebrick 9x9 vaulted room;
+- **maze**: square grid of W cells (footprint (2W+1)² nodes), deterministic
+  recursive backtracker, carrot removing `floor(W*W*0.08)` separator walls
+  (loops), beacon placed at the entry, enclosure open to the north;
+- **sky**: nearest island via `cloudlands.find_nearest_island` (radius
+  `sky_search_radius`); stabilized arrival platform: 3x3 on the real island
+  ground, or 7x7 artificial platform if the terrain is not there.
 
-### Liaison telemosaic
+### Telemosaic linking
 
-Les destinations sont programmées dans les deux sens via `telemosaic.set_destination`
-(lien retour désactivable par `housetelemosaic_return_enabled`), et des extendeurs sont
-posés automatiquement en spirale autour de chaque pad selon la distance (palier three,
-two puis one ; plafonné par `housetelemosaic_max_extenders`).
+Destinations are programmed in both directions via `telemosaic.set_destination`
+(return link can be disabled with `housetelemosaic_return_enabled`), and
+extenders are placed automatically in a spiral around each pad according to
+the distance (tier three, two then one; capped by
+`housetelemosaic_max_extenders`).
 
-### File de liaison persistante
+### Persistent link queue
 
-Les liaisons en attente sont persistées en mod storage (`{pad, job, plan, provider, tries}`)
-et reprises automatiquement :
+Pending links are persisted in mod storage (`{pad, job, plan, provider, tries}`)
+and resumed automatically:
 
-- LBM sur les beacons encore `pending` au chargement de leur chunk ;
-- re-traitement sur `on_generated` (au plus toutes les 10 s) et au démarrage du serveur ;
-- 3 essais par provider, puis bascule déterministe vers le provider suivant avant l'abandon
-  définitif (état `unlinked`).
+- LBM on beacons still `pending` when their chunk loads;
+- re-processing on `on_generated` (at most every 10 s) and at server startup;
+- 3 attempts per provider, then deterministic switch to the next provider
+  before the definitive giveup (`unlinked` state).
 
-## Réglages
+## Settings
 
-Tous les réglages sont clampés à leurs bornes documentées ; une valeur invalide retombe sur
-le défaut.
+All settings are clamped to their documented bounds; an invalid value falls
+back to the default.
 
-| Réglage | Défaut | Description |
-|---------|--------|-------------|
-| `housetelemosaic_chance` | `1.0` | Chance qu'une maison éligible reçoive le sous-sol (0.0 à 1.0) |
-| `housetelemosaic_destinations` | `cave,dungeon,maze,sky` | Liste ordonnée des destinations (`cave`, `dungeon`, `maze`, `sky`) |
-| `housetelemosaic_dest_mode` | `ordered` | `ordered` : première de la liste ; `random` : tirage parmi les disponibles |
-| `housetelemosaic_return_enabled` | `true` | Poser aussi un lien retour sur le pad de destination vers la maison |
-| `housetelemosaic_cave_artificial_fallback` | `true` | Grotte artificielle de secours sans grotte naturelle trouvée |
-| `housetelemosaic_cave_depth` | `30` | Profondeur cible du pad de grotte sous la surface (nœuds) |
-| `housetelemosaic_cave_radius` | `48` | Rayon de recherche horizontal d'une grotte naturelle (nœuds) |
-| `housetelemosaic_maze_depth` | `25` | Profondeur du pad de labyrinthe sous la surface (nœuds) |
-| `housetelemosaic_maze_width` | `21` | Largeur du labyrinthe en cellules (emprise 2W+1 nœuds, carré) |
-| `housetelemosaic_maze_height` | `5` | Hauteur des couloirs du labyrinthe (nœuds) |
-| `housetelemosaic_basement_depth` | `5` | Profondeur du sous-sol sous le plancher de la maison (nœuds) |
-| `housetelemosaic_sky_search_radius` | `512` | Rayon de recherche d'une île cloudlands (nœuds, 0 = désactivé) |
-| `housetelemosaic_max_extenders` | `12` | Extendeurs maximum par pad (0 = illimité) |
-| `housetelemosaic_debug` | `false` | Journalisation de debug détaillée dans le log du serveur |
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `housetelemosaic_chance` | `1.0` | Chance that an eligible house receives the basement (0.0 to 1.0) |
+| `housetelemosaic_destinations` | `cave,dungeon,maze,sky` | Ordered list of destinations (`cave`, `dungeon`, `maze`, `sky`) |
+| `housetelemosaic_dest_mode` | `ordered` | `ordered`: first of the list; `random`: draw among the available ones |
+| `housetelemosaic_return_enabled` | `true` | Also place a return link on the destination pad towards the house |
+| `housetelemosaic_cave_artificial_fallback` | `true` | Artificial fallback cave when no natural cave is found |
+| `housetelemosaic_cave_depth` | `30` | Target depth of the cave pad below the surface (nodes) |
+| `housetelemosaic_cave_radius` | `48` | Horizontal search radius for a natural cave (nodes) |
+| `housetelemosaic_maze_depth` | `25` | Depth of the maze pad below the surface (nodes) |
+| `housetelemosaic_maze_width` | `21` | Width of the maze in cells (footprint 2W+1 nodes, square) |
+| `housetelemosaic_maze_height` | `5` | Height of the maze corridors (nodes) |
+| `housetelemosaic_basement_depth` | `5` | Depth of the basement below the house floor (nodes) |
+| `housetelemosaic_sky_search_radius` | `512` | Search radius for a cloudlands island (nodes, 0 = disabled) |
+| `housetelemosaic_max_extenders` | `12` | Maximum extenders per pad (0 = unlimited) |
+| `housetelemosaic_debug` | `false` | Detailed debug logging in the server log |
 
-## Commandes
+## Commands
 
-| Commande | Privilège | Description |
+| Command | Privilege | Description |
 |----------|-----------|-------------|
-| `/htstats` | — | État de la file : entrées par provider, abandons cumulés, dernier pad, hook |
-| `/htcheck` | — | Diagnostic d'installation (hook, compteurs étape par étape) ; le rapport est aussi écrit dans `htcheck_report.txt` à la racine du monde |
-| `/htrelink` | `server` | Relance le traitement de toutes les entrées de la file |
-| `/htforce` | `server` | Test complet du pipeline : sous-sol + pad forcés sous la position du joueur |
-| `/htdebug` | `server` | Bascule la journalisation de debug en cours d'exécution |
-| `/htscanarea [<rayon>]` | `server` | Équipe rétroactivement les maisons déjà posées autour du joueur (déf. 64 nodes, 30 maisons/passage) |
-| `/htaudit [<rayon>] [fix\|report]` | `server` | Audite et répare les sous-sols déjà construits (échelles, puits, trappe, passage cellier, beacon encastré) |
-| `/htmaze <x> <y> <z> [<w> [<h>]]` | `server` | Labyrinthe de test de `w`x`h` cellules (déf. 15x15) en (x, y, z) |
+| `/htstats` | — | Queue status: entries per provider, cumulative giveups, last pad, hook |
+| `/htcheck` | — | Installation diagnostics (hook, step-by-step counters); the report is also written to `htcheck_report.txt` at the world root |
+| `/htrelink` | `server` | Restarts the processing of all queue entries |
+| `/htforce` | `server` | Full pipeline test: basement + pad forced under the player's position |
+| `/htdebug` | `server` | Toggles debug logging at runtime |
+| `/htscanarea [<radius>]` | `server` | Retroactively equips houses already placed around the player (def. 64 nodes, 30 houses/pass) |
+| `/htaudit [<radius>] [fix\|report]` | `server` | Audits and repairs already built basements (ladders, shaft, trapdoor, cellar passage, embedded beacon) |
+| `/htmaze <x> <y> <z> [<w> [<h>]]` | `server` | Test maze of `w`x`h` cells (def. 15x15) at (x, y, z) |
 
-## Notes techniques
+## Technical notes
 
-- **Déterminisme** : chaque tirage est un flux `PcgRandom` mélangé à la graine du monde et
-  aux coordonnées de la maison ; un chunk régénéré reconstruit le même sous-sol, un même
-  plan re-materialize exactement le même labyrinthe.
-- **Aucune écriture dans un chunk non généré** : toutes les constructions hors de l'emprise
-  déjà émergée de la maison (sous-sol, grotte, labyrinthe, plateforme) passent d'abord par
-  `emerge_area` ; le callback ne s'exécute que si 100 % des blocs émergent avec succès
-  (actions `EMERGE_FROM_MEMORY`, `EMERGE_FROM_DISK` ou `EMERGE_GENERATED`).
-- **Séparation verticale** des structures (F = plancher de la maison) : chambre du sous-sol
-  à F - basement_depth - 1 (sol à F-6 par défaut), labyrinthe à F - maze_depth, grotte
-  artificielle à y1 - cave_depth (au moins 26 nœuds sous la base de la maison) —
-  profondeurs distinctes par défaut, jamais superposées.
-- **Robustesse** : toute la chaîne asynchrone (callbacks emerge, minetest.after) est sous
-  `pcall` — une erreur du mod ne peut jamais interrompre le serveur ; le mod storage est
-  capturé au chargement uniquement (`get_mod_storage()` rend nil au runtime).
+- **Determinism**: every draw is a `PcgRandom` stream mixed with the world seed
+  and the house coordinates; a regenerated chunk rebuilds the same basement, the
+  same plan re-materializes exactly the same maze.
+- **No writing in an ungenerated chunk**: all constructions outside the already
+  emerged house footprint (basement, cave, maze, platform) first go through
+  `emerge_area`; the callback only runs if 100% of the blocks emerge
+  successfully (actions `EMERGE_FROM_MEMORY`, `EMERGE_FROM_DISK` or
+  `EMERGE_GENERATED`).
+- **Vertical separation** of the structures (F = house floor): basement room at
+  F - basement_depth - 1 (ground at F-6 by default), maze at F - maze_depth,
+  artificial cave at y1 - cave_depth (at least 26 nodes under the house base) —
+  distinct depths by default, never superimposed.
+- **Robustness**: the whole asynchronous chain (emerge callbacks,
+  minetest.after) is under `pcall` — a mod error can never interrupt the
+  server; the mod storage is captured at load time only
+  (`get_mod_storage()` returns nil at runtime).
 
-## Licence
+## License
 
-MIT (voir `mod.conf`).
+MIT (see `mod.conf`).

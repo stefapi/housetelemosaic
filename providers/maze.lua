@@ -1,30 +1,31 @@
--- providers/maze.lua : destination "labyrinthe".
--- Générateur DÉTERMINISTE recursive backtracker sur une grille de
--- cellules W x H (settings maze_width/maze_height en CELLULES) :
--- emprise en nodes (2W+1) x (2H+1). Numérotation BASE 1 : cellule
--- (cx,cy) -> node (2cx, 2cy), mur entre cellules adjacentes -> node
--- intermédiaire (2cx+dx, 2cy+dy). Entrée = cellule (1,1) -> node
--- (2,2) ; l'enceinte nord est ouverte au node (2,1) (au-dessus de
--- l'entrée, toujours, spec) ; le beacon est POSÉ à l'entrée.
--- Flux PcgRandom(seed, x1, z1) où seed = rng:next() capturé dans le
--- plan : le même plan régénère EXACTEMENT le même labyrinthe à chaque
--- re-materialize (grille booléenne reconstruite depuis les graines).
--- Cohérence verticale (doc) : labyrinthe à F - maze_depth (déf 25),
--- grotte artificielle à y1 - cave_depth (déf 30, plancher forcé à 26
--- sous y1) : profondeurs différentes par défaut, jamais superposés ;
--- si l'utilisateur règle maze_depth == cave_depth les deux creusent
--- au même niveau mais une maison n'a qu'UNE destination : sans
--- incidence. Clamp par sécurité y >= -280.
--- Convention cotes : origin.y = y du SOL du labyrinthe ; couloirs en
--- air de origin.y+1 à origin.y+maze_height ; murs/enceinte pleins sur
--- la même hauteur ; plafond à origin.y+maze_height+1 ; beacon à
--- l'entrée (node (2,2)) y = origin.y+1, 2 airs garantis au-dessus
--- (exigence telemosaic.is_valid_destination).
+-- providers/maze.lua: "maze" destination.
+-- DETERMINISTIC recursive backtracker generator on a grid of
+-- W x H cells (settings maze_width/maze_height in CELLS):
+-- footprint in nodes (2W+1) x (2H+1). BASE 1 numbering: cell
+-- (cx,cy) -> node (2cx, 2cy), wall between adjacent cells ->
+-- intermediate node (2cx+dx, 2cy+dy). Entry = cell (1,1) -> node
+-- (2,2); the north wall is open at node (2,1) (above the
+-- entry, always, per spec); the beacon is PLACED at the entry.
+-- PcgRandom(seed, x1, z1) flow where seed = rng:next() captured
+-- in the plan: the same plan regenerates EXACTLY the same maze on
+-- every re-materialize (boolean grid rebuilt from the seeds).
+-- Vertical coherence (doc): maze at F - maze_depth (def 25),
+-- artificial cave at y1 - cave_depth (def 30, floor forced 26
+-- under y1): different depths by default, never overlapping; if
+-- the user sets maze_depth == cave_depth both dig at the same
+-- level but a house has only ONE destination: no impact. Clamp
+-- for safety y >= -280.
+-- Dimension convention: origin.y = y of the maze GROUND;
+-- corridors in air from origin.y+1 to origin.y+maze_height;
+-- walls/enclosure solid over the same height; ceiling at
+-- origin.y+maze_height+1; beacon at the entry (node (2,2)) at
+-- y = origin.y+1, 2 guaranteed airs above (requirement of
+-- telemosaic.is_valid_destination).
 
 local ht = housetelemosaic
 
 --
--- Nodes résolus une fois au chargement (pattern basement.lua)
+-- Nodes resolved once at load time (basement.lua pattern)
 --
 local function pick(names, what)
     for _, n in ipairs(names) do
@@ -32,35 +33,36 @@ local function pick(names, what)
             return n
         end
     end
-    minetest.log("warning", "[housetelemosaic] node indisponible pour "
-        .. what .. " (essayés : " .. table.concat(names, ", ") .. ")")
+    minetest.log("warning", "[housetelemosaic] node unavailable for "
+        .. what .. " (tried: " .. table.concat(names, ", ") .. ")")
     return nil
 end
 
-local N_BEACON = pick({"telemosaic:beacon_off"}, "beacon labyrinthe")
+local N_BEACON = pick({"telemosaic:beacon_off"}, "maze beacon")
 local N_FLOOR = pick({"default:stone_block", "default:stone"},
-    "sol labyrinthe")
-local N_WALL = pick({"default:stone"}, "murs labyrinthe")
+    "maze ground")
+local N_WALL = pick({"default:stone"}, "maze walls")
 local N_FENCE = pick({"default:desert_stone", "default:stone"},
-    "enceinte labyrinthe")
-local N_TORCH_WALL = pick({"default:torch_wall"}, "torche murale maze")
-local N_TORCH = pick({"default:torch"}, "torche de sol maze")
+    "maze enclosure")
+local N_TORCH_WALL = pick({"default:torch_wall"}, "maze wall torch")
+local N_TORCH = pick({"default:torch"}, "maze floor torch")
 
--- Directions {dx, dz, param2} : torche posée à (pos + d), mur attendu
--- à (pos + 2d). Convention wallmounted officielle (cf. nativevillages
--- basements.lua ring_wallmounted, et default dir_to_wallmounted) :
--- param2 = direction du MUR de support DEPUIS la torche -- 2 = x+,
--- 3 = x-, 4 = z+, 5 = z- ; mur à l'est (+X) de la torche -> 2.
+-- Directions {dx, dz, param2}: torch placed at (pos + d),
+-- expected wall at (pos + 2d). Official wallmounted convention
+-- (cf. nativevillages basements.lua ring_wallmounted, and
+-- default dir_to_wallmounted): param2 = direction of the
+-- supporting WALL FROM the torch -- 2 = x+, 3 = x-, 4 = z+,
+-- 5 = z-; wall east (+X) of the torch -> 2.
 local WALL_DIRS = {
-    {1, 0, 2},   -- mur à l'est   (+X)
-    {-1, 0, 3},  -- mur à l'ouest (-X)
-    {0, 1, 4},   -- mur au sud    (+Z)
-    {0, -1, 5},  -- mur au nord   (-Z)
+    {1, 0, 2},   -- wall east   (+X)
+    {-1, 0, 3},  -- wall west   (-X)
+    {0, 1, 4},   -- wall south  (+Z)
+    {0, -1, 5},  -- wall north  (-Z)
 }
 
--- Torche murale sur le premier mur plein trouvé autour de ref, sinon
--- torche de sol à ref si son dessous est marchable. Retourne true si
--- posée.
+-- Wall torch on the first solid wall found around ref, otherwise
+-- floor torch at ref if the node below is walkable. Returns true
+-- if placed.
 local function place_torch(ref)
     for _, d in ipairs(WALL_DIRS) do
         local t = {x = ref.x + d[1], y = ref.y, z = ref.z + d[2]}
@@ -92,10 +94,11 @@ local function place_torch(ref)
 end
 
 --
--- Génération de la grille de murs (backtracker seedé + carotte).
--- walls[gz][gx] : true = mur plein, false = passage ; gx/gz en NODES
--- base 1, 1..2W+1 / 1..2H+1. Le bord (enceinte) reste toujours mur.
--- Retourne nil si les nodes de construction manquent.
+-- Generation of the wall grid (seeded backtracker + carrot).
+-- walls[gz][gx]: true = solid wall, false = passage; gx/gz in
+-- NODES base 1, 1..2W+1 / 1..2H+1. The border (enclosure) always
+-- stays a wall.
+-- Returns nil if the construction nodes are missing.
 --
 local function gen_walls(W, H, seed, x1, z1, carrot_seed)
     if not (N_WALL and N_FENCE and N_FLOOR) then
@@ -112,14 +115,14 @@ local function gen_walls(W, H, seed, x1, z1, carrot_seed)
     end
 
     local rng = PcgRandom(seed, x1, z1)
-    -- visited : clé cy * W + cx (cx dans 1..W, cy dans 1..H :
-    -- injectif), pile du backtracker
+    -- visited: key cy * W + cx (cx in 1..W, cy in 1..H:
+    -- injective), backtracker stack
     local visited = {}
     local stack = {}
     local cx, cy = 1, 1
     visited[cy * W + cx] = true
     stack[#stack + 1] = {cx, cy}
-    walls[2 * cy][2 * cx] = false -- node (2,2) : cellule entrée
+    walls[2 * cy][2 * cx] = false -- node (2,2): entry cell
 
     local DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
     while #stack > 0 do
@@ -137,7 +140,7 @@ local function gen_walls(W, H, seed, x1, z1, carrot_seed)
             stack[#stack] = nil
         else
             local ch = neigh[rng:next(1, #neigh)]
-            -- mur intermédiaire puis cellule cible
+            -- intermediate wall then target cell
             walls[2 * cy + ch[4]][2 * cx + ch[3]] = false
             cx, cy = ch[1], ch[2]
             walls[2 * cy][2 * cx] = false
@@ -146,11 +149,11 @@ local function gen_walls(W, H, seed, x1, z1, carrot_seed)
         end
     end
 
-    -- carotte (boucles) : retirer floor(W*H*0.08) murs séparateurs
-    -- aléatoires. Un mur séparateur a exactement une coordonnée paire
-    -- (gx pair & gz impair, ou gx impair & gz pair) : jamais les deux
-    -- paires (pilier d'angle), jamais les deux impaires (cellule).
-    -- Tirage par rejet : déterministe pour un carrot_seed donné.
+    -- carrot (loops): remove floor(W*H*0.08) random separator
+    -- walls. A separator wall has exactly one even coordinate
+    -- (gx even & gz odd, or gx odd & gz even): never both even
+    -- (corner pillar), never both odd (cell).
+    -- Rejection sampling: deterministic for a given carrot_seed.
     local carrot = math.floor(W * H * 0.08)
     local rng2 = PcgRandom(carrot_seed, x1, z1)
     for _ = 1, carrot do
@@ -165,27 +168,28 @@ local function gen_walls(W, H, seed, x1, z1, carrot_seed)
     return walls
 end
 
--- Exposé pour /htmaze (debug.lua) : grille complète pour un essai
+-- Exposed for /htmaze (debug.lua): complete grid for a test run
 function ht.maze_grid(W, H, seed, x1, z1, carrot_seed)
     return gen_walls(W, H, seed, x1, z1, carrot_seed)
 end
 
 --
--- Écriture en UNE SEULE passe VoxelManip (volume déjà émergé) :
---   sol    : N_FLOOR à origin.y sur TOUTE l'emprise
---   corps  : walls true -> N_WALL (intérieur) / N_FENCE (enceinte) ;
---            walls false -> air, de origin.y+1 à origin.y+hauteur
---   plafond : N_WALL à origin.y+hauteur+1 sur toute l'emprise
--- Puis ouverture de l'enceinte nord au node (2,1) (au-dessus de
--- l'entrée), sur la hauteur des couloirs. Beacon + torches en
--- set_node après write_to_map. Retourne la position du beacon.
+-- Writing in a SINGLE VoxelManip pass (volume already emerged):
+--   ground : N_FLOOR at origin.y over the WHOLE footprint
+--   body   : walls true -> N_WALL (interior) / N_FENCE
+--            (enclosure); walls false -> air, from origin.y+1 to
+--            origin.y+height
+--   ceiling : N_WALL at origin.y+height+1 over the whole footprint
+-- Then opening of the north enclosure at node (2,1) (above the
+-- entry), over the corridor height. Beacon + torches via
+-- set_node after write_to_map. Returns the beacon position.
 --
 local function write_maze(plan, walls)
     local W, H = plan.w, plan.h
     local gw, gh = 2 * W + 1, 2 * H + 1
     local o = plan.origin
-    -- hauteur des couloirs figée dans le plan (re-materialize
-    -- identique même si le setting change entre-temps)
+    -- corridor height frozen in the plan (identical
+    -- re-materialize even if the setting changes in between)
     local ch = plan.corridor_h or math.floor(ht.settings.maze_height)
 
     local minp = {x = o.x, y = o.y, z = o.z}
@@ -218,8 +222,8 @@ local function write_maze(plan, walls)
         end
     end
 
-    -- ouverture de l'enceinte nord au node (2,1) : au-dessus de
-    -- l'entrée, sur la hauteur des couloirs (le plafond reste plein)
+    -- opening of the north enclosure at node (2,1): above the
+    -- entry, over the corridor height (the ceiling stays solid)
     for y = o.y + 1, o.y + ch do
         data[area:index(o.x + 1, y, o.z)] = c_air
     end
@@ -227,9 +231,9 @@ local function write_maze(plan, walls)
     vm:set_data(data)
     vm:write_to_map(true)
 
-    -- beacon à l'entrée (node (2,2)) : le passage est déjà air sur
-    -- toute la hauteur, mais si maze_height < 3 on force les 2 airs
-    -- au-dessus du beacon (exigence telemosaic)
+    -- beacon at the entry (node (2,2)): the passage is already
+    -- air over the whole height, but if maze_height < 3 we force
+    -- the 2 airs above the beacon (telemosaic requirement)
     if not N_BEACON then
         return nil
     end
@@ -246,10 +250,11 @@ local function write_maze(plan, walls)
         end
     end
 
-    -- torches (murales sinon sol) : entrée, centre, coin opposé.
-    -- place_torch cherche un mur plein dans les 4 directions ; depuis
-    -- une cellule de labyrinthe au moins un mur sépare d'une voisine
-    -- (sauf carotte extrême : la pose est alors simplement sautée)
+    -- torches (wall otherwise floor): entry, center, opposite
+    -- corner. place_torch looks for a solid wall in the 4
+    -- directions; from a maze cell at least one wall separates
+    -- from a neighbor (except extreme carrot: the placement is
+    -- then simply skipped)
     place_torch(entry)
     place_torch({
         x = o.x + math.floor(gw / 2),
@@ -262,8 +267,8 @@ local function write_maze(plan, walls)
 end
 
 --
--- Travail une fois émergé : régénérer la grille depuis le plan (même
--- backtracker, mêmes graines = même labyrinthe), écrire, ancrer.
+-- Work once emerged: regenerate the grid from the plan (same
+-- backtracker, same seeds = same maze), write, anchor.
 --
 local function work_emerged(plan)
     local walls = gen_walls(plan.w, plan.h, plan.seed, plan.origin.x,
@@ -273,22 +278,22 @@ local function work_emerged(plan)
     end
     local dest = write_maze(plan, walls)
     if dest then
-        ht.dlog("maze : labyrinthe " .. plan.w .. "x" .. plan.h
-            .. " écrit, entrée " .. minetest.pos_to_string(dest))
+        ht.dlog("maze: maze " .. plan.w .. "x" .. plan.h
+            .. " written, entry " .. minetest.pos_to_string(dest))
     end
     return dest
 end
 
 ht.providers.maze = {
-    -- toujours disponible : indépendant du terrain (on creuse)
+    -- always available: terrain-independent (we dig)
     is_available = function(job)
         return true
     end,
 
-    -- Plan sérialisable complet : tout ce qu'il faut pour RÉGÉNÉRER
-    -- (dimensions, origine, graines, entrée). W/H capturés au moment
-    -- du plan : changer le setting ensuite ne casse pas une entrée de
-    -- file déjà sérialisée.
+    -- Complete serializable plan: everything needed to REGENERATE
+    -- (dimensions, origin, seeds, entry). W/H captured at plan
+    -- time: changing the setting afterwards does not break an
+    -- already serialized queue entry.
     get_destination = function(job, rng)
         if not N_BEACON then
             return nil
@@ -297,29 +302,30 @@ ht.providers.maze = {
         local cx = math.floor((box.x1 + box.x2) / 2)
         local cz = math.floor((box.z1 + box.z2) / 2)
 
-        -- F = niveau du plancher recalculé si possible, sinon
-        -- convention offset -4 + 1 -> y1 + 5 (spec)
+        -- F = floor level recomputed if possible, otherwise
+        -- offset -4 + 1 convention -> y1 + 5 (spec)
         local F = ht.scan_floor_y(box) or (box.y1 + 5)
 
-        -- décalage déterministe anti-colonne puits/sous-sol natif
+        -- deterministic offset against native shaft/basement
+        -- column
         local ox = rng:next(-10, 10)
         local oz = rng:next(-10, 10)
 
-        -- Grille carrée W x W : maze_width est la dimension en
-        -- CELLULES ; maze_height est la hauteur VERTICALE des
-        -- couloirs (bornes 3..10), pas une dimension de grille
+        -- Square W x W grid: maze_width is the dimension in
+        -- CELLS; maze_height is the VERTICAL height of the
+        -- corridors (bounds 3..10), not a grid dimension
         local W = math.floor(ht.settings.maze_width)
         local H = W
         local gw = 2 * W + 1
         local gh = 2 * H + 1
 
-        -- y du SOL du labyrinthe : F - maze_depth, clampé >= -280
+        -- y of the maze GROUND: F - maze_depth, clamped >= -280
         local y = F - math.floor(ht.settings.maze_depth)
         if y < -280 then
             y = -280
         end
-        -- origin = coin nord-ouest (node (1,1)) : l'emprise gw x gh
-        -- est centrée sur (cx+ox, cz+oz)
+        -- origin = north-west corner (node (1,1)): the gw x gh
+        -- footprint is centered on (cx+ox, cz+oz)
         local origin = {
             x = cx + ox - math.floor(gw / 2),
             y = y,
@@ -331,15 +337,15 @@ ht.providers.maze = {
             origin = origin,
             w = W,
             h = H,
-            -- hauteur des couloirs capturée AUSSI : un re-materialize
-            -- (LBM, file) reconstruit exactement le même volume même
-            -- si le setting a changé entre-temps
+            -- corridor height captured AS WELL: a re-materialize
+            -- (LBM, queue) rebuilds exactly the same volume even
+            -- if the setting has changed in between
             corridor_h = math.floor(ht.settings.maze_height),
-            -- graines complètes du PcgRandom (capturées UNE fois :
-            -- chaque re-materialize régénère le même labyrinthe)
+            -- complete PcgRandom seeds (captured ONCE: every
+            -- re-materialize regenerates the same maze)
             seed = rng:next(0, 2147483647),
             carrot_seed = rng:next(0, 2147483647),
-            -- entrée = node (2,2) : cellule (1,1)
+            -- entry = node (2,2): cell (1,1)
             entry = {x = origin.x + 1, y = origin.y + 1,
                 z = origin.z + 1},
         }
@@ -348,7 +354,8 @@ ht.providers.maze = {
     materialize = function(job, plan, callback)
         local o = plan.origin
         local ch = plan.corridor_h or math.floor(ht.settings.maze_height)
-        -- +1 de marge autour de l'emprise pour les set_node d'équipement
+        -- +1 margin around the footprint for the equipment
+        -- set_node calls
         local minp = {x = o.x - 1, y = o.y - 1, z = o.z - 1}
         local maxp = {
             x = o.x + 2 * plan.w + 1,
@@ -361,8 +368,8 @@ ht.providers.maze = {
                 callback(true, dest)
             else
                 if not ok then
-                    minetest.log("warning", "[housetelemosaic] maze : "
-                        .. "échec de matérialisation : " .. tostring(dest))
+                    minetest.log("warning", "[housetelemosaic] maze: "
+                        .. "materialization failed: " .. tostring(dest))
                 end
                 callback(false, nil)
             end

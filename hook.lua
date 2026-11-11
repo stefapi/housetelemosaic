@@ -1,30 +1,30 @@
--- hook.lua : accroche sur le flux de placement de biomevillages.
--- Monkey-patch UNIQUE de biomevillages.basements.maybe_dig_basement :
--- placement.lua run_job relit biomevillages.basements à CHAQUE appel
--- (placement.lua:773) et l'appelle sous pcall pour chaque maison posée,
--- APRÈS place_schematic -- la maison est donc déjà construite quand le
--- wrapper tourne. Fallback vérifié : biomevillages.dungeon.
--- maybe_place_hidden_entrance (même convention, placement.lua:792).
--- Sans les deux : mod inerte avec un log d'erreur explicite.
+-- hook.lua: hooks into the biomevillages placement flow.
+-- SINGLE monkey-patch of biomevillages.basements.maybe_dig_basement:
+-- placement.lua run_job re-reads biomevillages.basements on EVERY call
+-- (placement.lua:773) and calls it under pcall for each placed house,
+-- AFTER place_schematic -- the house is therefore already built when
+-- the wrapper runs. Verified fallback: biomevillages.dungeon.
+-- maybe_place_hidden_entrance (same convention, placement.lua:792).
+-- Without either: inert mod with an explicit error log.
 
 local ht = housetelemosaic
 
--- Préfixes des maisons éligibles (convention basements.lua:144 ; les
--- maisons jungle s'enregistrent junglehouse1-3 malgré leurs fichiers
--- cannibalhouse*, d'où les deux entrées). Les bâtiments civiques
--- (étables, puits, tours...) ne portent aucun de ces préfixes.
+-- Prefixes of eligible houses (basements.lua:144 convention; jungle
+-- houses register as junglehouse1-3 despite their cannibalhouse*
+-- files, hence the two entries). Civic buildings (barns, wells,
+-- towers...) carry none of these prefixes.
 local PREFIXES = {
-    -- familles tribales (convention basements.lua)
+    -- tribal families (basements.lua convention)
     "grasslandhouse", "deserthouse", "savannahouse",
     "icehouse", "junglehouse", "cannibalhouse",
-    -- familles élargies : les noms ne partagent pas le préfixe
-    -- grasslandhouse (town_house_large_1/2, medium, small, tiny_1/2/3,
-    -- small_house_1_0, witchhouse) ; l'exclusion "_cloudlands"
-    -- ci-dessous filtre leurs variantes d'îles flottantes
+    -- extended families: names do not share the grasslandhouse
+    -- prefix (town_house_large_1/2, medium, small, tiny_1/2/3,
+    -- small_house_1_0, witchhouse); the "_cloudlands" exclusion
+    -- below filters their floating-island variants
     "grasslandtown_house", "grasslandsmall_house",
     "savannawitchhouse",
-    -- PAS "lakehouse" : maisons sur pilotis ancrées dans l'eau (le
-    -- natif les exclut aussi) -- aucun plancher marchable dessous
+    -- NOT "lakehouse": stilt houses anchored in water (the
+    -- native mod excludes them too) -- no walkable floor below
 }
 
 function ht.is_eligible(job)
@@ -33,7 +33,7 @@ function ht.is_eligible(job)
         return false
     end
     if name:find("_cloudlands", 1, true) then
-        return false -- îles flottantes, rien de solide à creuser
+        return false -- floating islands, nothing solid to dig into
     end
     for _, prefix in ipairs(PREFIXES) do
         if name:sub(1, #prefix) == prefix then
@@ -43,10 +43,10 @@ function ht.is_eligible(job)
     return false
 end
 
--- Tirage chance déterministe par maison (ré-exécutable à l'identique
--- sur un chunk régénéré). Compteurs de session -> /htcheck ; log
--- action UNIQUEMENT pour les maisons retenues (les bâtiments civiques
--- et les tirages écartés seraient trop verbeux, ils sont comptés).
+-- Deterministic chance draw per house (re-executed identically on a
+-- regenerated chunk). Session counters -> /htcheck; action log ONLY
+-- for retained houses (civic buildings and rejected draws would be
+-- too verbose, they are counted).
 function ht.handle_house(job)
     ht.stats.calls = ht.stats.calls + 1
     if not job or not job.box or not job.pos then
@@ -62,31 +62,31 @@ function ht.handle_house(job)
     local draw = rng:next(0, 999999) / 999999
     if draw >= ht.settings.chance then
         ht.stats.chance_skip = ht.stats.chance_skip + 1
-        ht.dlog(job.name .. " : tirage " .. draw .. " >= "
-            .. ht.settings.chance .. ", écarté")
+        ht.dlog(job.name .. ": draw " .. draw .. " >= "
+            .. ht.settings.chance .. ", rejected")
         return
     end
     minetest.log("action", "[housetelemosaic] " .. job.name .. " ("
-        .. minetest.pos_to_string(job.pos) .. ") : éligible, tirage "
-        .. string.format("%.3f", draw) .. " retenu (< "
+        .. minetest.pos_to_string(job.pos) .. "): eligible, draw "
+        .. string.format("%.3f", draw) .. " retained (< "
         .. ht.settings.chance .. ")")
     local copy = ht.deep_copy(job)
-    -- protégé : une erreur dans un callback minetest.after est
-    -- fatale pour le serveur
+    -- protected: an error in a minetest.after callback is fatal
+    -- for the server
     minetest.after(0.1, function()
         local ok, err = pcall(ht.process_house, copy)
         if not ok then
-            minetest.log("error", "[housetelemosaic] process_house a "
-                .. "échoué (tâche différée) : " .. tostring(err)
+            minetest.log("error", "[housetelemosaic] process_house "
+                .. "failed (deferred task): " .. tostring(err)
                 .. "\n" .. debug.traceback())
         end
     end)
 end
 
--- Job "mince" sérialisable : le job natif peut porter des fonctions
--- ou des références non sérialisables ; la file (mod storage) n'a
--- besoin que de name, box, pos et biome_name (contrat des providers,
--- qui ne lisent que ces champs)
+-- Serializable "slim" job: the native job may carry functions or
+-- non-serializable references; the queue (mod storage) only needs
+-- name, box, pos and biome_name (the providers' contract, they
+-- only read these fields)
 local function slim_job(job)
     return {
         name = job.name,
@@ -99,12 +99,12 @@ local function slim_job(job)
     }
 end
 
--- Chaîne de candidats : providers disponibles pour la maison, dans
--- l'ordre du setting destinations (mode "ordered") ou avec rotation
--- aléatoire déterministe (mode "random" : même liste, point de
--- départ tiré par le rng). exclude : provider à écarter (chaîne de
--- fallback de la file après échec). Utilisé par process_house ET par
--- la file (link_queue) pour recalculer le provider suivant.
+-- Chain of candidates: providers available for the house, in the
+-- order of the destinations setting ("ordered" mode) or with
+-- deterministic random rotation ("random" mode: same list, starting
+-- point drawn by the rng). exclude: provider to leave out (queue
+-- fallback chain after failure). Used by process_house AND by the
+-- queue (link_queue) to recompute the next provider.
 function ht.candidate_providers(job, rng, exclude)
     local avail = {}
     for _, dest in ipairs(ht.settings.destinations) do
@@ -125,11 +125,11 @@ function ht.candidate_providers(job, rng, exclude)
     return avail
 end
 
--- Sélection du plan : premier candidat dont get_destination répond.
--- Le rng est re-seedé par maison avec un offset (0 à la création,
--- incrémenté à chaque fallback dans la file) : déterministe par
--- maison, tout en variant la variante de secours par rapport à la
--- tentative échouée. Positionne plan.provider (traçabilité JSON).
+-- Plan selection: first candidate whose get_destination answers.
+-- The rng is re-seeded per house with an offset (0 at creation,
+-- incremented on each queue fallback): deterministic per house,
+-- while varying the fallback variant compared to the failed
+-- attempt. Sets plan.provider (JSON traceability).
 function ht.select_plan(job, offset, exclude)
     local rng = ht.house_rng(job.box.x1, job.box.y1, job.box.z1,
         ht.BASE_SEED + (offset or 0))
@@ -142,26 +142,26 @@ function ht.select_plan(job, offset, exclude)
         end
         if not ok then
             minetest.log("warning", "[housetelemosaic] get_destination "
-                .. "a échoué pour " .. dest .. " : " .. tostring(plan))
+                .. "failed for " .. dest .. ": " .. tostring(plan))
         end
     end
     return nil, nil
 end
 
--- Construction du sous-sol + sélection de destination (chaîne
--- is_available -> get_destination avec fallbacks) + mise en file ;
--- la file (link_queue) déroule materialize + ht.link_pads.
+-- Basement construction + destination selection (is_available ->
+-- get_destination chain with fallbacks) + enqueueing; the queue
+-- (link_queue) runs materialize + ht.link_pads.
 function ht.process_house(job)
     local tag = job.name .. " (" .. minetest.pos_to_string(job.pos) .. ")"
     local F, why = ht.scan_floor_y(job.box)
     if not F then
-        -- MODE SANS PLANCHER : toutes les sondes ont échoué (cellier
-        -- natif meublé couvrant chaque sonde) -- au lieu d'abandonner,
-        -- on tente le
-        -- PATCH DIRECT du cellier natif avec un F estimé (y1+3 :
-        -- ancrage -4 + un node de plancher ; find_native_cellar_floor
-        -- revalide chaque dalle de toute façon, une erreur d'une ou
-        -- deux nodes sur l'estimation est sans effet sur lui)
+        -- FLOORLESS MODE: all probes failed (furnished native
+        -- cellar covering every probe) -- instead of giving up, we
+        -- attempt the
+        -- DIRECT PATCH of the native cellar with an estimated F
+        -- (y1+3: anchor -4 + one floor node; find_native_cellar_floor
+        -- revalidates every slab anyway, an error of one or two
+        -- nodes in the estimate has no effect on it)
         local box = job.box
         local cx = math.floor((box.x1 + box.x2) / 2)
         local cz = math.floor((box.z1 + box.z2) / 2)
@@ -180,8 +180,8 @@ function ht.process_house(job)
             ht.stats.pads_dug = ht.stats.pads_dug + 1
             ht.last_pad_planned = pad
             minetest.log("action", "[housetelemosaic] " .. job.name
-                .. " : plancher introuvable, cellier natif patché "
-                .. "directement, pad " .. minetest.pos_to_string(pad))
+                .. ": floor not found, native cellar patched "
+                .. "directly, pad " .. minetest.pos_to_string(pad))
             local plan, provider_name = ht.select_plan(job, 0)
             if plan and provider_name then
                 ht.stats.queued = ht.stats.queued + 1
@@ -196,22 +196,22 @@ function ht.process_house(job)
             return
         end
         ht.stats.no_floor = ht.stats.no_floor + 1
-        minetest.log("action", "[housetelemosaic] abandon pour " .. tag
-            .. " : " .. tostring(why))
+        minetest.log("action", "[housetelemosaic] giveup for " .. tag
+            .. ": " .. tostring(why))
         return
     end
     ht.stats.floors = ht.stats.floors + 1
     minetest.log("action", "[housetelemosaic] " .. job.name
-        .. " : plancher détecté F=" .. F)
+        .. ": floor detected F=" .. F)
     local pad = ht.build_basement(job, F)
     if not pad then
-        return -- build_basement logge sa raison d'abandon propre
+        return -- build_basement logs its own giveup reason
     end
     ht.stats.pads = ht.stats.pads + 1
-    -- position prévue du pad (le dig réel est asynchrone : emerge ;
-    -- /htforce et /htcheck affichent cette position en attendant)
+    -- planned pad position (the actual dig is asynchronous: emerge;
+    -- /htforce and /htcheck display this position in the meantime)
     ht.last_pad_planned = pad
-    -- Sélection : chaîne complète avec fallbacks
+    -- Selection: full chain with fallbacks
     local plan, provider_name = ht.select_plan(job, 0)
     if plan and provider_name then
         ht.stats.queued = ht.stats.queued + 1
@@ -223,19 +223,19 @@ function ht.process_house(job)
             tries = 0,
         })
         minetest.log("action", "[housetelemosaic] pad "
-            .. minetest.pos_to_string(pad) .. " posé pour " .. tag
-            .. ", liaison " .. provider_name .. " mise en file")
+            .. minetest.pos_to_string(pad) .. " placed for " .. tag
+            .. ", link " .. provider_name .. " enqueued")
     else
         minetest.get_meta(pad):set_string("housetelemosaic:state",
             "unlinked")
         minetest.log("action", "[housetelemosaic] pad "
-            .. minetest.pos_to_string(pad) .. " posé mais aucune "
-            .. "destination disponible pour " .. tag)
+            .. minetest.pos_to_string(pad) .. " placed but no "
+            .. "destination available for " .. tag)
     end
 end
 
 --
--- Le patch proprement dit
+-- The patch itself
 --
 
 local function patch_applied()
@@ -247,45 +247,45 @@ function ht.install_hook()
         return true
     end
     if not minetest.global_exists("biomevillages") then
-        minetest.log("error", "[housetelemosaic] biomevillages absent : "
-            .. "mod inerte")
+        minetest.log("error", "[housetelemosaic] biomevillages absent: "
+            .. "inert mod")
         return false
     end
     local nv = biomevillages
 
-    -- Marqueur de source pour /htcheck : chemin réel du mod natif
-    -- wrappé. Une seule version de biomevillages existe à la fois
-    -- (l'hypothétique doublon "biomevillages_origin" serait visible
-    -- ici : chemin différent), les deux copies présentes sur cette
-    -- machine sont identiques au byte près (diff -rq vide).
+    -- Source marker for /htcheck: real path of the wrapped native
+    -- mod. Only one version of biomevillages exists at a time (the
+    -- hypothetical "biomevillages_origin" duplicate would be visible
+    -- here: different path), the two copies present on this machine
+    -- are byte-for-byte identical (empty diff -rq).
     ht._source = tostring(minetest.get_modpath("biomevillages"))
 
-    -- Point d'accroche principal, VÉRIFIÉ dans placement.lua:773-780 :
-    -- relit biomevillages.basements à chaque run_job
+    -- Main hook point, VERIFIED in placement.lua:773-780:
+    -- re-reads biomevillages.basements on every run_job
     local Bs = nv.basements
     if type(Bs) == "table" and type(Bs.maybe_dig_basement) == "function" then
         local original = Bs.maybe_dig_basement
         Bs.maybe_dig_basement = function(job)
             local ok, err = pcall(original, job)
             if not ok then
-                minetest.log("warning", "[housetelemosaic] hook natif "
-                    .. "maybe_dig_basement a échoué : " .. tostring(err))
+                minetest.log("warning", "[housetelemosaic] native hook "
+                    .. "maybe_dig_basement failed: " .. tostring(err))
             end
             local ok2, err2 = pcall(ht.handle_house, job)
             if not ok2 then
-                minetest.log("warning", "[housetelemosaic] handle_house a "
-                    .. "échoué : " .. tostring(err2))
+                minetest.log("warning", "[housetelemosaic] handle_house "
+                    .. "failed: " .. tostring(err2))
             end
         end
         ht._patched = "basements.maybe_dig_basement"
-        minetest.log("action", "[housetelemosaic] hook installé sur "
+        minetest.log("action", "[housetelemosaic] hook installed on "
             .. "biomevillages.basements.maybe_dig_basement")
         return true
     end
 
-    -- Fallback vérifié : dungeon_entrances.lua:712, appelé sous pcall
-    -- par run_job (placement.lua:792-795), mêmes garanties (par maison,
-    -- après placement, job en argument)
+    -- Verified fallback: dungeon_entrances.lua:712, called under
+    -- pcall by run_job (placement.lua:792-795), same guarantees
+    -- (per house, after placement, job as argument)
     local D = nv.dungeon
     if type(D) == "table"
         and type(D.maybe_place_hidden_entrance) == "function" then
@@ -293,34 +293,34 @@ function ht.install_hook()
         D.maybe_place_hidden_entrance = function(job)
             local ok, err = pcall(original, job)
             if not ok then
-                minetest.log("warning", "[housetelemosaic] hook natif "
-                    .. "maybe_place_hidden_entrance a échoué : "
+                minetest.log("warning", "[housetelemosaic] native hook "
+                    .. "maybe_place_hidden_entrance failed: "
                     .. tostring(err))
             end
             local ok2, err2 = pcall(ht.handle_house, job)
             if not ok2 then
-                minetest.log("warning", "[housetelemosaic] handle_house a "
-                    .. "échoué : " .. tostring(err2))
+                minetest.log("warning", "[housetelemosaic] handle_house "
+                    .. "failed: " .. tostring(err2))
             end
         end
         ht._patched = "dungeon.maybe_place_hidden_entrance"
-        minetest.log("action", "[housetelemosaic] hook installé sur "
+        minetest.log("action", "[housetelemosaic] hook installed on "
             .. "biomevillages.dungeon.maybe_place_hidden_entrance "
             .. "(fallback, basements absent)")
         return true
     end
 
-    -- Aucun point d'accroche réel : impossible de détecter les
-    -- schematics posés autrement, le mod reste inerte
-    minetest.log("error", "[housetelemosaic] aucun point d'accroche "
-        .. "trouvé dans biomevillages (basements.maybe_dig_basement "
-        .. "et dungeon.maybe_place_hidden_entrance absents) : mod inerte")
+    -- No real hook point: impossible to detect schematics placed
+    -- otherwise, the mod stays inert
+    minetest.log("error", "[housetelemosaic] no hook point "
+        .. "found in biomevillages (basements.maybe_dig_basement "
+        .. "and dungeon.maybe_place_hidden_entrance absent): inert mod")
     return false
 end
 
--- telemosaic (dépendance dure) et biomevillages (dépendance dure du
--- mod.conf) sont chargés avant housetelemosaic ; l'ordre dépend du nom,
--- le patch est donc posé une fois tous les mods initialisés
+-- telemosaic (hard dependency) and biomevillages (hard dependency of
+-- mod.conf) are loaded before housetelemosaic; the order depends on
+-- the name, so the patch is applied once all mods are initialized
 minetest.register_on_mods_loaded(function()
     ht.install_hook()
 end)

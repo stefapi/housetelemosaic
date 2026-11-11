@@ -1,45 +1,48 @@
--- providers/sky.lua : destination "île cloudlands" (mod optionnel).
--- API cloudlands utilisée (vérifiée dans cloudlands.lua:1574-1611) :
+-- providers/sky.lua: "cloudlands island" destination (optional
+-- mod).
+-- cloudlands API used (verified in cloudlands.lua:1574-1611):
 --   cloudlands.find_nearest_island(x, z, search_radius) -> table
---     {x, z, radius, ...} ou nil
---   cloudlands.get_height_at(x, z, [coreList]) -> y, isWater ou nil
---     (y = altitude du SOL de l'île ; calcul noise déterministe)
--- setting cloudlands_altitude : défaut RÉEL 180 (settingtypes.txt du
--- mod cloudlands, PAS 200 comme l'annonçait l'ébauche de spec).
+--     {x, z, radius, ...} or nil
+--   cloudlands.get_height_at(x, z, [coreList]) -> y, isWater or nil
+--     (y = altitude of the island GROUND; deterministic noise
+--     computation)
+-- cloudlands_altitude setting: REAL default 180 (settingtypes.txt
+-- of the cloudlands mod, NOT 200 as the draft spec claimed).
 --
--- RAISONNEMENT EMERGE/GÉNÉRATION (documenté ici) :
--- cloudlands écrit ses îles dans SON register_on_generated. Un
--- chunk d'île pas encore généré au moment de la liaison maison
--- pourrait sembler devoir écraser une plateforme posée trop tôt.
--- MAIS emerge_area GÉNÈRE les mapblocks non générés (et déclenche
--- donc les on_generated, celui de cloudlands compris) avant de
--- rendre la main : après ht.emerge_and_run, le terrain de l'île est
--- TOUJOURS présent si le calcul noise la place là. La seule vraie
--- incertitude est "l'île passe-t-elle exactement par ce (x,z) et à
--- quel y" -> on ne décide RIEN à l'avance : après emerge, on relit
--- le node à island_ground_y :
---   walkable      -> l'île est bien là : plateforme stabilisante
---                    3x3 + beacon + 4 torches ;
---   air/non-walk. -> pas d'île à cet endroit (cas réel : île
---                    retirée par removeUnwantedIslands, ou arrondi
---                    de calcul au bord) -> plateforme ARTIFICIELLE
---                    7x7 posée MAINTENANT : le chunk est généré,
---                    aucune écriture future du mapgen ne l'écrasera
---                    (le mapgen n'écrit que les chunks non générés,
---                    et la seule fenêtre "entre emerge et set_node"
---                    ne peut pas voir passer un mapgen : emerge ne
---                    rend la main qu'une fois tous les blocs générés).
--- Aucune fenêtre de risque : documenté et tranché.
+-- EMERGE/GENERATION REASONING (documented here):
+-- cloudlands writes its islands in ITS register_on_generated. An
+-- island chunk not yet generated at house-link time might seem
+-- destined to overwrite a platform placed too early.
+-- BUT emerge_area GENERATES ungenerated mapblocks (and therefore
+-- triggers the on_generated calls, including cloudlands') before
+-- returning: after ht.emerge_and_run, the island terrain is
+-- ALWAYS present if the noise computation places it there. The
+-- only real uncertainty is "does the island pass exactly through
+-- this (x,z) and at what y" -> we decide NOTHING in advance:
+-- after the emerge, we re-read the node at island_ground_y:
+--   walkable      -> the island is indeed there: stabilizing
+--                    platform 3x3 + beacon + 4 torches;
+--   air/non-walk. -> no island at this spot (real case: island
+--                    removed by removeUnwantedIslands, or
+--                    computation rounding at the edge) ->
+--                    ARTIFICIAL platform 7x7 placed NOW: the
+--                    chunk is generated, no future mapgen write
+--                    will overwrite it (the mapgen only writes
+--                    ungenerated chunks, and the only window
+--                    "between emerge and set_node" cannot see a
+--                    mapgen pass: emerge only returns once all
+--                    the blocks are generated).
+-- No risk window: documented and settled.
 --
--- is_available : cloudlands présent, maison sans "_cloudlands",
--- rayon de recherche > 0, maison en dessous de l'altitude des îles
--- moins une tolérance de 80 (les maisons îles sont déjà exclues par
--- le préfixe dans hook.lua, la garde reste une sécurité).
+-- is_available: cloudlands present, house without "_cloudlands",
+-- search radius > 0, house below the island altitude minus a
+-- tolerance of 80 (island houses are already excluded by the
+-- prefix in hook.lua, the guard remains a safety net).
 
 local ht = housetelemosaic
 
 --
--- Nodes résolus une fois au chargement (pattern basement.lua)
+-- Nodes resolved once at load time (basement.lua pattern)
 --
 local function pick(names, what)
     for _, n in ipairs(names) do
@@ -47,31 +50,31 @@ local function pick(names, what)
             return n
         end
     end
-    minetest.log("warning", "[housetelemosaic] node indisponible pour "
-        .. what .. " (essayés : " .. table.concat(names, ", ") .. ")")
+    minetest.log("warning", "[housetelemosaic] node unavailable for "
+        .. what .. " (tried: " .. table.concat(names, ", ") .. ")")
     return nil
 end
 
-local N_BEACON = pick({"telemosaic:beacon_off"}, "beacon cloudlands")
+local N_BEACON = pick({"telemosaic:beacon_off"}, "cloudlands beacon")
 local N_PLAT = pick({"default:stone_block", "default:stone"},
-    "plateforme cloudlands")
+    "cloudlands platform")
 local N_SNOW = pick({"default:snowblock", "default:snow"},
-    "garde-corps plateforme")
-local N_TORCH_WALL = pick({"default:torch_wall"}, "torche murale sky")
-local N_TORCH = pick({"default:torch"}, "torche de sol sky")
+    "platform guardrail")
+local N_TORCH_WALL = pick({"default:torch_wall"}, "sky wall torch")
+local N_TORCH = pick({"default:torch"}, "sky floor torch")
 
--- Altitude moyenne des îles : setting réel du mod, défaut 180
+-- Average island altitude: real setting of the mod, default 180
 local function island_altitude()
     return tonumber(minetest.settings:get("cloudlands_altitude"))
         or 180
 end
 
 --
--- Recherche d'un point d'arrivée SEC sur l'île : centre puis
--- décalages ±radius/3 dans les 4 directions (get_height_at signale
--- l'eau par isWater ; l'échantillonnage évite les étangs ; un seul
--- appel par offset, noise déterministe peu coûteux).
--- Retourne {x, y, z} (y = SOL de l'île) ou nil.
+-- Search for a DRY arrival point on the island: center then
+-- ±radius/3 offsets in the 4 directions (get_height_at signals
+-- water via isWater; the sampling avoids ponds; a single call per
+-- offset, deterministic noise is cheap).
+-- Returns {x, y, z} (y = island GROUND) or nil.
 --
 local function find_land(island)
     local offsets = {
@@ -93,9 +96,9 @@ local function find_land(island)
 end
 
 --
--- Torche posée à p si p est air et son dessous marchable : muret
--- torch_wall sur le bord cherché sinon simple torche de sol.
--- Retourne true si posée.
+-- Torch placed at p if p is air and the node below walkable:
+-- torch_wall mount on the searched edge, otherwise a simple
+-- floor torch. Returns true if placed.
 --
 local function torch_here(p)
     local n = minetest.get_node_or_nil(p)
@@ -112,11 +115,11 @@ local function torch_here(p)
 end
 
 --
--- Équipement commun (zone émergée) : beacon + 2 airs garantis +
--- 4 torches aux coins (plateforme artificielle : coins à +/-3 de la
--- dalle 7x7 ; sol naturel : torches autour du beacon à +/-2, posées
--- seulement si le dessous est solide -- au bord d'une île en pente
--- une torche peut être sautée, sans gravité).
+-- Common equipment (emerged zone): beacon + 2 guaranteed airs +
+-- 4 corner torches (artificial platform: corners at +/-3 of the
+-- 7x7 slab; natural ground: torches around the beacon at +/-2,
+-- placed only if the node below is solid -- at the edge of a
+-- sloping island a torch may be skipped, no harm done).
 --
 local function equip_platform(platform)
     if not N_BEACON then
@@ -142,11 +145,11 @@ local function equip_platform(platform)
 end
 
 --
--- Plateforme artificielle 7x7 : UNE passe VoxelManip -- dalle
--- stone_block à ground_y, 2 niveaux d'air au-dessus (le beacon et
--- les torches suivent en set_node) -- puis garde-corps neigeux aux
--- 4 coins. Le joueur arrive au-dessus du vide éventuel mais sur du
--- solide, au niveau calculé de l'île manquante.
+-- 7x7 artificial platform: ONE VoxelManip pass -- stone_block
+-- slab at ground_y, 2 levels of air above (the beacon and the
+-- torches follow via set_node) -- then snowy guardrails at the 4
+-- corners. The player arrives above any void but on solid
+-- ground, at the computed level of the missing island.
 --
 local function build_artificial_platform(platform, ground_y)
     if not (N_BEACON and N_PLAT) then
@@ -172,7 +175,7 @@ local function build_artificial_platform(platform, ground_y)
     vm:set_data(data)
     vm:write_to_map(true)
 
-    -- garde-corps neigeux aux 4 coins (à +/-3 : sur la dalle)
+    -- snowy guardrails at the 4 corners (at +/-3: on the slab)
     if N_SNOW then
         local corners = {{3, 3}, {-3, 3}, {3, -3}, {-3, -3}}
         for _, c in ipairs(corners) do
@@ -184,9 +187,9 @@ local function build_artificial_platform(platform, ground_y)
 end
 
 --
--- Travail une fois émergé : relire le sol (raisonnement en tête de fichier).
--- platform.y = island_ground_y + 1 -> le sol attendu est à
--- platform.y - 1.
+-- Work once emerged: re-read the ground (reasoning at the top of
+-- the file). platform.y = island_ground_y + 1 -> the expected
+-- ground is at platform.y - 1.
 --
 local function work_emerged(plan)
     local platform = plan.platform
@@ -194,9 +197,10 @@ local function work_emerged(plan)
     local n = minetest.get_node_or_nil(
         {x = platform.x, y = ground_y, z = platform.z})
     if n and ht.is_walkable_name(n.name) then
-        -- île présente : plateforme stabilisante 3x3 stone_block
-        -- posée par set_node à ground_y (sol local remplacé pour
-        -- une arrivée propre, l'île reste intacte ailleurs)
+        -- island present: stabilizing 3x3 stone_block platform
+        -- placed via set_node at ground_y (local ground replaced
+        -- for a clean arrival, the island stays intact
+        -- elsewhere)
         if N_PLAT then
             for lx = platform.x - 1, platform.x + 1 do
                 for lz = platform.z - 1, platform.z + 1 do
@@ -205,12 +209,12 @@ local function work_emerged(plan)
                 end
             end
         end
-        ht.dlog("sky : arrivée stabilisée sur l'île à "
+        ht.dlog("sky: arrival stabilized on the island at "
             .. minetest.pos_to_string(platform))
         return equip_platform(platform)
     end
-    ht.dlog("sky : sol absent après emerge, plateforme artificielle "
-        .. "à " .. minetest.pos_to_string(platform))
+    ht.dlog("sky: ground absent after emerge, artificial platform "
+        .. "at " .. minetest.pos_to_string(platform))
     return build_artificial_platform(platform, ground_y)
 end
 
@@ -225,19 +229,20 @@ ht.providers.sky = {
         if job and job.name and job.name:find("_cloudlands", 1, true) then
             return false
         end
-        -- la maison doit être nettement SOUS l'altitude des îles
+        -- the house must be clearly BELOW the island altitude
         if job and job.box and job.box.y1 > island_altitude() - 80 then
             return false
         end
         return true
     end,
 
-    -- Plan sérialisable : position calculée UNE fois (noise
-    -- déterministe : un recalcul redonnerait le même y). link_direct
-    -- = île déjà CHARGÉE au moment du plan ; get_node_or_nil ne
-    -- distingue pas "généré-déchargé" de "jamais généré" -> drapeau
-    -- purement informatif, la vérité est lue après emerge dans
-    -- materialize (raisonnement en tête de fichier).
+    -- Serializable plan: position computed ONCE (deterministic
+    -- noise: a recomputation would yield the same y). link_direct
+    -- = island already LOADED at plan time; get_node_or_nil does
+    -- not distinguish "generated-unloaded" from "never
+    -- generated" -> purely informative flag, the truth is read
+    -- after the emerge in materialize (reasoning at the top of
+    -- the file).
     get_destination = function(job, rng)
         if not N_BEACON then
             return nil
@@ -248,14 +253,14 @@ ht.providers.sky = {
         local island = cloudlands.find_nearest_island(cx, cz,
             math.floor(ht.settings.sky_search_radius))
         if not island then
-            ht.dlog("sky : aucune île dans un rayon de "
+            ht.dlog("sky: no island within a radius of "
                 .. ht.settings.sky_search_radius)
             return nil
         end
         local land = find_land(island)
         if not land then
-            ht.dlog("sky : île la plus proche sans point sec "
-                .. "(rayon " .. ht.settings.sky_search_radius .. ")")
+            ht.dlog("sky: nearest island without a dry point "
+                .. "(radius " .. ht.settings.sky_search_radius .. ")")
             return nil
         end
         local n = minetest.get_node_or_nil(land)
@@ -272,8 +277,8 @@ ht.providers.sky = {
 
     materialize = function(job, plan, callback)
         local p = plan.platform
-        -- ±6 en xz / ±3 en y autour de la plateforme : couvre la
-        -- dalle 7x7, les garde-corps et les lectures de sol
+        -- ±6 in xz / ±3 in y around the platform: covers the 7x7
+        -- slab, the guardrails and the ground reads
         local minp = {x = p.x - 6, y = p.y - 3, z = p.z - 6}
         local maxp = {x = p.x + 6, y = p.y + 3, z = p.z + 6}
         ht.emerge_and_run(minp, maxp, function()
@@ -282,8 +287,8 @@ ht.providers.sky = {
                 callback(true, dest)
             else
                 if not ok then
-                    minetest.log("warning", "[housetelemosaic] sky : "
-                        .. "échec de matérialisation : " .. tostring(dest))
+                    minetest.log("warning", "[housetelemosaic] sky: "
+                        .. "materialization failed: " .. tostring(dest))
                 end
                 callback(false, nil)
             end
