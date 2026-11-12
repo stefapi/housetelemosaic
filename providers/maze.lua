@@ -46,6 +46,27 @@ local N_FENCE = pick({"default:desert_stone", "default:stone"},
     "maze enclosure")
 local N_TORCH_WALL = pick({"default:torch_wall"}, "maze wall torch")
 local N_TORCH = pick({"default:torch"}, "maze floor torch")
+local N_CHEST = pick({"default:chest"}, "maze reward chest")
+
+-- Reward chest loot: "well filled" but deterministic. PcgRandom
+-- per stack, seed derived from the maze loot_seed: a
+-- re-materialize refills the chest IDENTICALLY (idempotent
+-- rebuild after a crash/LBM resume).
+-- Item pools in draw order {name, min, max}; counts drawn per
+-- stack. Items of uninstalled mods are skipped at fill time
+-- (ItemStack of an unknown item = empty).
+local LOOT_POOL = {
+    {"default:gold_ingot",     3, 12},
+    {"default:diamond",        1, 5},
+    {"default:mese_crystal",   1, 4},
+    {"default:steel_ingot",    4, 16},
+    {"default:bronze_ingot",   2, 10},
+    {"default:torch",          8, 32},
+    {"default:apple",          3, 12},
+    {"default:book",           1, 3},
+    {"farming:bread",          2, 8},
+    {"default:obsidian_shard", 4, 16},
+}
 
 -- Directions {dx, dz, param2}: torch placed at (pos + d),
 -- expected wall at (pos + 2d). Official wallmounted convention
@@ -174,6 +195,92 @@ function ht.maze_grid(W, H, seed, x1, z1, carrot_seed)
 end
 
 --
+-- Scattered torches: every maze CELL (node (2cx, 2cz)) receives a
+-- torch with probability ~1/8, drawn deterministically from
+-- torch_seed (PcgRandom re-seeded per cell: stable whatever the
+-- iteration order). place_torch finds the wall of the cell (a
+-- cell always has at least one wall except in extreme carrot
+-- cases: the torch is then simply skipped). A 21x21-cell maze
+-- gets ~55 torches: "here and there" without lighting the whole
+-- solution path.
+--
+local function scatter_torches(plan, walls)
+    if not (N_TORCH_WALL or N_TORCH) then
+        return
+    end
+    local o = plan.origin
+    local W, H = plan.w, plan.h
+    local placed = 0
+    for cy = 1, H do
+        for cx = 1, W do
+            local rng = PcgRandom(plan.torch_seed or 0,
+                o.x + 2 * cx, o.z + 2 * cy)
+            if rng:next(0, 7) == 0 then
+                if place_torch({
+                    x = o.x + 2 * cx - 1,
+                    y = o.y + 1,
+                    z = o.z + 2 * cy - 1,
+                }) then
+                    placed = placed + 1
+                end
+            end
+        end
+    end
+    ht.dlog("maze: " .. placed .. " scattered torch(es)")
+end
+
+--
+-- Reward chest at the EXIT of the maze: the cell diagonally
+-- OPPOSITE the entry (cell (W,H) -> node (2W, 2H) = the far
+-- corner). Filled deterministically from loot_seed: the whole
+-- LOOT_POOL is drawn, 1 stack per item, count drawn in [min,max];
+-- unknown items (uninstalled mod) are skipped via ItemStack
+-- checks. A torch is placed next to the chest so the reward
+-- shimmers at the end of the corridors.
+--
+local function place_reward_chest(plan)
+    if not N_CHEST then
+        return nil
+    end
+    local o = plan.origin
+    local W, H = plan.w, plan.h
+    -- node (2W, 2H): the open cell of the far corner
+    local pos = {x = o.x + 2 * W - 1, y = o.y + 1,
+        z = o.z + 2 * H - 1}
+    local node = minetest.get_node_or_nil(pos)
+    if not node or node.name ~= "air" then
+        -- defensive: carrot/corner edge case, one cell inward
+        pos = {x = pos.x - 2, y = pos.y, z = pos.z - 2}
+        node = minetest.get_node_or_nil(pos)
+        if not node or node.name ~= "air" then
+            ht.dlog("maze: no room for the reward chest")
+            return nil
+        end
+    end
+    minetest.set_node(pos, {name = N_CHEST, param2 = 0})
+    local meta = minetest.get_meta(pos)
+    local inv = meta:get_inventory()
+    inv:set_size("main", 32)
+    local rng = PcgRandom(plan.loot_seed or 0)
+    local list = {}
+    local n = 0
+    for _, item in ipairs(LOOT_POOL) do
+        local stack = ItemStack(item[1] .. " "
+            .. rng:next(item[2], item[3]))
+        if not stack:is_empty() then
+            n = n + 1
+            list[n] = stack:to_string()
+        end
+    end
+    inv:set_list("main", list)
+    -- wall torch next to the chest: the reward is visible
+    place_torch({x = pos.x + 1, y = pos.y, z = pos.z})
+    ht.dlog("maze: reward chest filled with " .. n .. " stack(s) "
+        .. "at " .. minetest.pos_to_string(pos))
+    return pos
+end
+
+--
 -- Writing in a SINGLE VoxelManip pass (volume already emerged):
 --   ground : N_FLOOR at origin.y over the WHOLE footprint
 --   body   : walls true -> N_WALL (interior) / N_FENCE
@@ -263,6 +370,11 @@ local function write_maze(plan, walls)
     })
     place_torch({x = o.x + gw - 2, y = o.y + 1, z = o.z + gh - 2})
 
+    -- scattered torches (~1/8 of the cells, deterministic) and
+    -- the reward chest at the far corner (the "exit")
+    scatter_torches(plan, walls)
+    place_reward_chest(plan)
+
     return entry
 end
 
@@ -345,6 +457,11 @@ ht.providers.maze = {
             -- re-materialize regenerates the same maze)
             seed = rng:next(0, 2147483647),
             carrot_seed = rng:next(0, 2147483647),
+            -- scattered torches + reward chest (older plans
+            -- without these fields fall back to seed 0: still
+            -- deterministic)
+            torch_seed = rng:next(0, 2147483647),
+            loot_seed = rng:next(0, 2147483647),
             -- entry = node (2,2): cell (1,1)
             entry = {x = origin.x + 1, y = origin.y + 1,
                 z = origin.z + 1},
